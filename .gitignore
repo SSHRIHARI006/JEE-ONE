@@ -1,0 +1,45 @@
+# --- Security & Secrets (CRITICAL) ---
+.env
+*.env
+secrets/
+*.json
+!blockchain_node/package.json
+# ^ Don't ignore package.json, but DO ignore service-account.json or API keys
+
+# --- Python / Django ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+db.sqlite3
+media/
+static_root/
+
+# --- Node.js / Blockchain ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Databases ---
+*.sql
+*.mysql
+*.dump
+# Ignore local DB backups containing patient data
+dump.rdb
+
+# --- OS & IDEs ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# --- Logs ---
+*.log
+logs/
