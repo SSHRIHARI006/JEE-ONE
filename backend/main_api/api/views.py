@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Hospital
+from .models import Hospitals
 import requests
 import os
 
@@ -14,12 +14,12 @@ class HospitalRankerView(APIView):
             return Response({"error": "Latitude and Longitude required"}, status=400)
 
         # 2. Fetch Hospitals from MySQL JIVAN
-        hospitals = list(Hospital.objects.all())
+        hospitals = list(Hospitals.objects.all())
         if not hospitals:
             return Response({"error": "No hospitals found in DB"}, status=404)
 
         # 3. Prepare ORS Matrix Request
-        ors_key = os.getenv('ORS_API_KEY')
+        ors_key = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjMyMGNjOGI4ODc2YTQ4NTI4ZTMzNmYwNGI3NjE0YmNiIiwiaCI6Im11cm11cjY0In0='
         url = "https://api.openrouteservice.org/v2/matrix/driving-car"
         
         # ORS expects [longitude, latitude]

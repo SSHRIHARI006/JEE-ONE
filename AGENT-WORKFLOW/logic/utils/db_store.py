@@ -177,6 +177,52 @@ def load_hospital_coordinates(hospital_id: str) -> Optional[Dict[str, float]]:
     return {"latitude": float(row["latitude"]), "longitude": float(row["longitude"])}
 
 
+def persist_new_case(patient: PatientEmergencyModel) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    ts = datetime.fromisoformat(patient.timestamp).replace(tzinfo=None) if patient.timestamp else now
+
+    cursor.execute(
+        """
+        INSERT IGNORE INTO patients (patient_id, age, gender, created_at)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (patient.patient_id, patient.demographics.age, patient.demographics.gender, now),
+    )
+
+    cursor.execute("DELETE FROM triage WHERE case_id = %s", (patient.case_id,))
+    cursor.execute("DELETE FROM recommendations WHERE case_id = %s", (patient.case_id,))
+    cursor.execute("DELETE FROM ambulance_assignment WHERE case_id = %s", (patient.case_id,))
+    cursor.execute("DELETE FROM event_logs WHERE case_id = %s", (patient.case_id,))
+    cursor.execute("DELETE FROM emergency_cases WHERE case_id = %s", (patient.case_id,))
+    cursor.execute(
+        """
+        INSERT INTO emergency_cases (case_id, patient_id, source_type, timestamp, latitude, longitude,
+                                     spo2, systolic_bp, severity_score, urgency_level, required_specialist)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            patient.case_id,
+            patient.patient_id,
+            patient.source_type,
+            ts,
+            patient.location.latitude,
+            patient.location.longitude,
+            patient.vitals.spo2,
+            patient.vitals.systolic_bp,
+            patient.triage_output.severity_score,
+            patient.triage_output.urgency_level,
+            patient.triage_output.required_specialist,
+        ),
+    )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 def persist_core_outputs(
     case_id: str,
     severity: int,
@@ -192,7 +238,16 @@ def persist_core_outputs(
 
     cursor.execute(
         """
-        INSERT INTO triage (case_id, severity, urgency, needs_icu, specialist)
+        UPDATE emergency_cases
+        SET severity_score = %s, urgency_level = %s, required_specialist = %s
+        WHERE case_id = %s
+        """,
+        (severity, urgency, specialist, case_id),
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO triage (case_id, severity_score, urgency_level, needs_icu, required_specialist)
         VALUES (%s, %s, %s, %s, %s)
         """,
         (case_id, severity, urgency, int(needs_icu), specialist),
@@ -222,7 +277,7 @@ def persist_core_outputs(
     for event in events:
         cursor.execute(
             """
-            INSERT INTO event_logs (event_id, case_id, event, timestamp)
+            INSERT INTO event_logs (event_id, case_id, event_type, timestamp)
             VALUES (%s, %s, %s, %s)
             """,
             (f"ev_{uuid.uuid4().hex[:16]}", case_id, event, now_value),

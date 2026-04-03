@@ -2,19 +2,22 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from logic.agents.explanation_agent import run_explanation_agent
+from logic.agents.input_agent import run_input_agent
 from logic.agents.triage_agent import run_triage_agent
 from logic.models.hospital_model import (
     HospitalNotificationModel,
     HospitalNotificationRequiredResourcesModel,
 )
-from logic.models.patient_model import CoordinatesModel
+from logic.models.patient_model import CoordinatesModel, PatientEmergencyModel
+
+_DEFAULT_LOCATION = CoordinatesModel(latitude=18.518, longitude=73.815)
 from logic.services.hospital_service import recommend_hospitals
 from logic.services.routing_service import build_route
 from logic.services.triage_service import evaluate_triage
 from logic.utils.db_store import (
     load_hospital_coordinates,
-    load_latest_patient_case,
     persist_core_outputs,
+    persist_new_case,
 )
 
 
@@ -23,8 +26,15 @@ def _now_iso() -> str:
 
 
 def run_medic_pipeline(input_text: str) -> Dict:
-    patient = load_latest_patient_case()
+    patient_data = run_input_agent(input_text)
+    patient = PatientEmergencyModel(**patient_data)
     patient.source_type = "ambulance"
+
+    lat, lon = patient.location.latitude, patient.location.longitude
+    if not (17.0 <= lat <= 20.0 and 72.5 <= lon <= 75.5):
+        patient.location = _DEFAULT_LOCATION
+
+    persist_new_case(patient)
 
     triage_context = run_triage_agent(patient)
     triage_eval = evaluate_triage(patient, triage_context)

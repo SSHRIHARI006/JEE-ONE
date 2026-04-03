@@ -49,3 +49,5 @@ AGENT-WORKFLOW/prompt.md
 AGENT-WORKFLOW/workflow.md
 AGENT-WORKFLOW/smoke_test.py
 AGENT-WORKFLOW/temp_python_tests
+AGENT-WORKFLOW\.env
+AGENT-WORKFLOW\venv
