@@ -1,47 +1,130 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../core/app_colors.dart';
+import '../services/mapbox_service.dart';
 import '../widgets/app_page_header.dart';
 import '../widgets/app_shell_scaffold.dart';
 import '../widgets/primary_action_button.dart';
 
-class NavigationScreen extends StatelessWidget {
+class NavigationScreen extends StatefulWidget {
   const NavigationScreen({super.key});
 
   @override
+  State<NavigationScreen> createState() => _NavigationScreenState();
+}
+
+class _NavigationScreenState extends State<NavigationScreen> {
+  List<LatLng> routePoints = [];
+  bool isLoadingRoute = true;
+  String? routeError;
+
+  late Map<String, dynamic>? navData;
+  late Map<String, dynamic>? hospital;
+  late Map<String, dynamic>? fullResponse;
+
+  late String hospitalName;
+  late int eta;
+  late num distance;
+  late String explanation;
+  late double hospitalLat;
+  late double hospitalLng;
+
+  // Source point (patient / ambulance current location)
+  final double patientLat = 18.521;
+  final double patientLng = 73.812;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final extra = GoRouterState.of(context).extra;
+    navData = extra is Map<String, dynamic> ? extra : null;
+
+    hospital = navData?['hospital'] as Map<String, dynamic>?;
+    fullResponse = navData?['fullResponse'] as Map<String, dynamic>?;
+
+    hospitalName = hospital?['name']?.toString() ?? 'Selected Hospital';
+    eta = hospital?['eta'] ?? 0;
+    distance = hospital?['distance_km'] ?? 0;
+    explanation = hospital?['explanation']?.toString() ?? 'Route ready';
+
+    hospitalLat = (hospital?['latitude'] as num?)?.toDouble() ?? 18.5015;
+    hospitalLng = (hospital?['longitude'] as num?)?.toDouble() ?? 73.8205;
+
+    if (routePoints.isEmpty && isLoadingRoute) {
+      _loadRoute();
+    }
+  }
+
+  Future<void> _loadRoute() async {
+    try {
+      final points = await MapboxService.getRoute(
+        startLat: patientLat,
+        startLng: patientLng,
+        endLat: hospitalLat,
+        endLng: hospitalLng,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        routePoints = points;
+        isLoadingRoute = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        routeError = e.toString();
+        isLoadingRoute = false;
+        routePoints = [
+          LatLng(patientLat, patientLng),
+          LatLng(hospitalLat, hospitalLng),
+        ];
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final LatLng patientPoint = LatLng(patientLat, patientLng);
+    final LatLng hospitalPoint = LatLng(hospitalLat, hospitalLng);
+
     return AppShellScaffold(
       bottomNavigationBar: const _BottomNavBar(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _BrandBar(onBack: () => context.go('/hospital-list')),
+          _BrandBar(
+            onBack: () => context.go('/hospital-list', extra: fullResponse),
+          ),
           const SizedBox(height: 18),
 
           AppPageHeader(
             eyebrow: 'Navigation',
             title: 'Route to hospital',
-            subtitle:
-                'Follow the fastest current path to the selected facility.',
+            subtitle: hospitalName,
             trailing: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: AppColors.dangerSoft,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Column(
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '08',
-                    style: TextStyle(
+                    eta.toString(),
+                    style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
                       color: AppColors.primary,
                     ),
                   ),
-                  SizedBox(height: 2),
-                  Text(
+                  const SizedBox(height: 2),
+                  const Text(
                     'MIN',
                     style: TextStyle(
                       fontSize: 10,
@@ -67,190 +150,167 @@ class NavigationScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    _StatusTag(
-                      label: 'FASTEST ROUTE',
-                      bgColor: AppColors.infoSoft,
-                      textColor: AppColors.info,
-                    ),
-                    _StatusTag(
-                      label: 'LIVE TRACKING',
-                      bgColor: AppColors.dangerSoft,
-                      textColor: AppColors.primary,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
                 const Text(
-                  'City General Hospital',
+                  'Live Route',
                   style: TextStyle(
-                    fontSize: 22,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: AppColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Marine Drive, Mumbai',
-                  style: TextStyle(
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 320,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: isLoadingRoute
+                        ? const Center(child: CircularProgressIndicator())
+                        : FlutterMap(
+                            options: MapOptions(
+                              initialCenter: LatLng(
+                                (patientLat + hospitalLat) / 2,
+                                (patientLng + hospitalLng) / 2,
+                              ),
+                              initialZoom: 13.2,
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate:
+                                    'https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${MapboxService.accessToken}',
+                                additionalOptions: const {
+                                  'accessToken': MapboxService.accessToken,
+                                  'id': 'mapbox/streets-v11',
+                                },
+                              ),
+                              PolylineLayer(
+                                polylines: [
+                                  Polyline(
+                                    points: routePoints,
+                                    strokeWidth: 5,
+                                    color: AppColors.primary,
+                                  ),
+                                ],
+                              ),
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: patientPoint,
+                                    width: 70,
+                                    height: 70,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          height: 18,
+                                          width: 18,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primary,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: Colors.white,
+                                              width: 3,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        const Text(
+                                          'Patient',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.textPrimary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Marker(
+                                    point: hospitalPoint,
+                                    width: 90,
+                                    height: 90,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          height: 42,
+                                          width: 42,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.info,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: Colors.white,
+                                              width: 3,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.local_hospital,
+                                            color: Colors.white,
+                                            size: 22,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          hospitalName,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.textPrimary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  explanation,
+                  style: const TextStyle(
                     fontSize: 14,
+                    height: 1.4,
                     color: AppColors.textSecondary,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 16),
-
-                Container(
-                  height: 280,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceSoft,
-                    borderRadius: BorderRadius.circular(18),
+                if (routeError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Route fallback used: $routeError',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
                   ),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(painter: _RouteMapPainter()),
-                      ),
-                      Positioned(
-                        top: 14,
-                        left: 14,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: AppColors.border),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.traffic,
-                                size: 16,
-                                color: AppColors.warning,
-                              ),
-                              SizedBox(width: 6),
-                              Text(
-                                'Traffic +2 min',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 26,
-                        right: 28,
-                        child: Container(
-                          height: 54,
-                          width: 54,
-                          decoration: BoxDecoration(
-                            color: AppColors.info,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 4),
-                          ),
-                          child: const Icon(
-                            Icons.local_hospital,
-                            color: Colors.white,
-                            size: 28,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 28,
-                        left: 34,
-                        child: Container(
-                          height: 20,
-                          width: 20,
-                          decoration: BoxDecoration(
-                            color: AppColors.primary,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 3),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                ],
               ],
             ),
           ),
 
           const SizedBox(height: 18),
 
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final bool stack = constraints.maxWidth < 400;
-
-              if (stack) {
-                return Column(
-                  children: const [
-                    _RouteStatCard(
-                      title: 'Distance',
-                      value: '3.8 km',
-                      icon: Icons.route_outlined,
-                      color: AppColors.info,
-                    ),
-                    SizedBox(height: 10),
-                    _RouteStatCard(
-                      title: 'Traffic Delay',
-                      value: '+2 min',
-                      icon: Icons.warning_amber_rounded,
-                      color: AppColors.warning,
-                    ),
-                    SizedBox(height: 10),
-                    _RouteStatCard(
-                      title: 'Arrival ETA',
-                      value: '14:22',
-                      icon: Icons.access_time,
-                      color: AppColors.primary,
-                    ),
-                  ],
-                );
-              }
-
-              return const Row(
-                children: [
-                  Expanded(
-                    child: _RouteStatCard(
-                      title: 'Distance',
-                      value: '3.8 km',
-                      icon: Icons.route_outlined,
-                      color: AppColors.info,
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: _RouteStatCard(
-                      title: 'Traffic Delay',
-                      value: '+2 min',
-                      icon: Icons.warning_amber_rounded,
-                      color: AppColors.warning,
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: _RouteStatCard(
-                      title: 'Arrival ETA',
-                      value: '14:22',
-                      icon: Icons.access_time,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              );
-            },
+          Row(
+            children: [
+              Expanded(
+                child: _RouteStatCard(
+                  title: 'Distance',
+                  value: '${distance.toString()} km',
+                  icon: Icons.route_outlined,
+                  color: AppColors.info,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _RouteStatCard(
+                  title: 'ETA',
+                  value: '$eta min',
+                  icon: Icons.access_time,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
           ),
 
           const SizedBox(height: 24),
@@ -260,29 +320,6 @@ class NavigationScreen extends StatelessWidget {
             icon: Icons.arrow_forward,
             onPressed: () => context.go('/handover'),
           ),
-
-          const SizedBox(height: 12),
-
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: OutlinedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.call_outlined),
-              label: const Text(
-                'Contact Hospital',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.textPrimary,
-                side: const BorderSide(color: AppColors.border),
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -291,7 +328,6 @@ class NavigationScreen extends StatelessWidget {
 
 class _BrandBar extends StatelessWidget {
   final VoidCallback onBack;
-
   const _BrandBar({required this.onBack});
 
   @override
@@ -309,11 +345,7 @@ class _BrandBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.border),
             ),
-            child: const Icon(
-              Icons.arrow_back_ios_new,
-              size: 18,
-              color: AppColors.textPrimary,
-            ),
+            child: const Icon(Icons.arrow_back_ios_new, size: 18),
           ),
         ),
         const SizedBox(width: 12),
@@ -325,53 +357,7 @@ class _BrandBar extends StatelessWidget {
             color: AppColors.primary,
           ),
         ),
-        const Spacer(),
-        Container(
-          height: 40,
-          width: 40,
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: const Icon(
-            Icons.notifications_none,
-            size: 20,
-            color: AppColors.textPrimary,
-          ),
-        ),
       ],
-    );
-  }
-}
-
-class _StatusTag extends StatelessWidget {
-  final String label;
-  final Color bgColor;
-  final Color textColor;
-
-  const _StatusTag({
-    required this.label,
-    required this.bgColor,
-    required this.textColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: textColor,
-        ),
-      ),
     );
   }
 }
@@ -398,75 +384,46 @@ class _RouteStatCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Icon(icon, size: 20, color: color),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary,
+          Container(
+            height: 42,
+            width: 42,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
             ),
+            child: Icon(icon, color: color, size: 20),
           ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
-}
-
-class _RouteMapPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint gridPaint = Paint()
-      ..color = const Color(0xFFDADFE5)
-      ..strokeWidth = 1;
-
-    for (double x = 0; x < size.width; x += 28) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-
-    for (double y = 0; y < size.height; y += 28) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final Paint routePaint = Paint()
-      ..color = AppColors.primary
-      ..strokeWidth = 4
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final Path path = Path();
-    path.moveTo(size.width * 0.15, size.height * 0.82);
-    path.quadraticBezierTo(
-      size.width * 0.28,
-      size.height * 0.62,
-      size.width * 0.42,
-      size.height * 0.55,
-    );
-    path.quadraticBezierTo(
-      size.width * 0.62,
-      size.height * 0.46,
-      size.width * 0.78,
-      size.height * 0.18,
-    );
-
-    canvas.drawPath(path, routePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _BottomNavBar extends StatelessWidget {
@@ -511,31 +468,24 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: active ? AppColors.dangerSoft : Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 20,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: 20,
+          color: active ? AppColors.primary : AppColors.textSecondary,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
             color: active ? AppColors.primary : AppColors.textSecondary,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: active ? AppColors.primary : AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
