@@ -148,6 +148,7 @@ def recommend_hospitals(case_id: str, patient_location: CoordinatesModel, requir
                 score=score,
                 resource_match=resource_match,
                 hospital_state=HospitalStateModel(
+                    available_icu_beds=available_icu,
                     load_percentage=dynamic_item.current_load_percentage,
                     intake_delay=dynamic_item.avg_intake_delay,
                     readiness_score=dynamic_item.readiness_score,

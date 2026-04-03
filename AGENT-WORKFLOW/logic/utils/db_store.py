@@ -247,7 +247,7 @@ def persist_core_outputs(
 
     cursor.execute(
         """
-        INSERT INTO triage (case_id, severity_score, urgency_level, needs_icu, required_specialist)
+        INSERT INTO triage (case_id, severity, urgency, needs_icu, specialist)
         VALUES (%s, %s, %s, %s, %s)
         """,
         (case_id, severity, urgency, int(needs_icu), specialist),
@@ -277,7 +277,173 @@ def persist_core_outputs(
     for event in events:
         cursor.execute(
             """
-            INSERT INTO event_logs (event_id, case_id, event_type, timestamp)
+            INSERT INTO event_logs (event_id, case_id, event, timestamp)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (f"ev_{uuid.uuid4().hex[:16]}", case_id, event, now_value),
+        )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def load_critical_batch_patients(limit: int = 5) -> List[PatientEmergencyModel]:
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT ec.case_id, ec.patient_id, ec.source_type, ec.timestamp, ec.latitude, ec.longitude,
+               ec.spo2, ec.systolic_bp, ec.severity_score, ec.urgency_level, ec.required_specialist,
+               p.age, p.gender
+        FROM emergency_cases ec
+        JOIN patients p ON p.patient_id = ec.patient_id
+        WHERE ec.severity_score >= 7
+        ORDER BY ec.severity_score DESC, ec.timestamp ASC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    patients: List[PatientEmergencyModel] = []
+    for row in rows:
+        severity = int(row.get("severity_score") or 0)
+        spo2 = float(row.get("spo2") or 0)
+        specialist = str(row.get("required_specialist") or "general")
+        urgency = str(row.get("urgency_level") or "high")
+
+        symptoms: List[str] = []
+        if specialist in {"cardio", "cardiology"}:
+            symptoms.append("chest_pain")
+        if spo2 < 90:
+            symptoms.append("breathing_issue")
+        if severity >= 8:
+            symptoms.append("unconsciousness")
+
+        payload = {
+            "case_id": str(row["case_id"]),
+            "patient_id": str(row["patient_id"]),
+            "source_type": str(row.get("source_type") or "ambulance"),
+            "timestamp": _to_iso(row.get("timestamp")),
+            "demographics": {
+                "age": int(row.get("age") or 0),
+                "gender": str(row.get("gender") or "unknown"),
+                "weight": 0.0,
+            },
+            "location": {
+                "latitude": float(row.get("latitude") or 0.0),
+                "longitude": float(row.get("longitude") or 0.0),
+            },
+            "vitals": {
+                "heart_rate": 0,
+                "systolic_bp": int(row.get("systolic_bp") or 0),
+                "diastolic_bp": int((row.get("systolic_bp") or 0) * 0.65),
+                "spo2": spo2,
+                "respiratory_rate": 10 if spo2 < 90 else 16,
+                "temperature": 36.9,
+            },
+            "condition_flags": {
+                "conscious": severity < 9,
+                "breathing": spo2 >= 90,
+                "bleeding": False,
+            },
+            "symptoms": sorted(set(symptoms)),
+            "injury_type": "medical_emergency",
+            "pain_level": 8 if "chest_pain" in symptoms else 4,
+            "time_since_incident": 10,
+            "medical_context": {"history": [], "allergies": []},
+            "triage_output": {
+                "severity_score": severity,
+                "urgency_level": urgency if urgency in {"low", "medium", "high", "critical"} else "high",
+                "needs_ICU": severity >= 8,
+                "needs_ventilator": spo2 < 88,
+                "needs_surgery": False,
+                "required_specialist": specialist,
+                "estimated_time_to_critical": 15 if severity >= 8 else 45,
+            },
+        }
+        patients.append(PatientEmergencyModel(**payload))
+
+    return patients
+
+
+def persist_batch_result(
+    case_id: str,
+    severity: int,
+    urgency: str,
+    specialist: str,
+    recommendations: HospitalRecommendationModel,
+    ambulance_assignment: Optional[AmbulanceAssignmentModel],
+    selected_hospital_id: str,
+    events: List[str],
+    icu_decrement: int = 1,
+    load_increment: float = 5.0,
+) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE emergency_cases
+        SET severity_score = %s, urgency_level = %s, required_specialist = %s
+        WHERE case_id = %s
+        """,
+        (severity, urgency, specialist, case_id),
+    )
+
+    cursor.execute("DELETE FROM triage WHERE case_id = %s", (case_id,))
+    cursor.execute(
+        """
+        INSERT INTO triage (case_id, severity, urgency, needs_icu, specialist)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (case_id, severity, urgency, int(severity >= 7), specialist),
+    )
+
+    cursor.execute("DELETE FROM recommendations WHERE case_id = %s", (case_id,))
+    for rec in recommendations.recommendations:
+        cursor.execute(
+            """
+            INSERT INTO recommendations (case_id, hospital_id, eta, score, compatibility)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (case_id, rec.hospital_id, rec.eta, rec.score, rec.compatibility),
+        )
+
+    if ambulance_assignment is not None:
+        cursor.execute("DELETE FROM ambulance_assignment WHERE case_id = %s", (case_id,))
+        cursor.execute(
+            """
+            INSERT INTO ambulance_assignment (case_id, ambulance_id, eta_to_patient)
+            VALUES (%s, %s, %s)
+            """,
+            (case_id, ambulance_assignment.ambulance_id, ambulance_assignment.eta_to_patient),
+        )
+
+    cursor.execute(
+        """
+        UPDATE hospital_dynamic_status
+        SET available_ICU_beds = GREATEST(available_ICU_beds - %s, 0),
+            current_load_percentage = LEAST(current_load_percentage + %s, 100),
+            last_updated_timestamp = %s
+        WHERE hospital_id = %s
+        """,
+        (
+            icu_decrement,
+            load_increment,
+            datetime.now(timezone.utc).replace(tzinfo=None),
+            selected_hospital_id,
+        ),
+    )
+
+    now_value = datetime.now(timezone.utc).replace(tzinfo=None)
+    for event in events:
+        cursor.execute(
+            """
+            INSERT INTO event_logs (event_id, case_id, event, timestamp)
             VALUES (%s, %s, %s, %s)
             """,
             (f"ev_{uuid.uuid4().hex[:16]}", case_id, event, now_value),

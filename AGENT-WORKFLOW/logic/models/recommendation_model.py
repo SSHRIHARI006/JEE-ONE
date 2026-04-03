@@ -10,6 +10,7 @@ class ResourceMatchModel(BaseModel):
 
 
 class HospitalStateModel(BaseModel):
+    available_icu_beds: int = 0
     load_percentage: float = 0.0
     intake_delay: int = 0
     readiness_score: float = 0.0
