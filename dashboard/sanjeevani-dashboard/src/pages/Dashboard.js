@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Typography, Chip } from "@mui/material";
 
 import CaseIntakePanel from "../components/CaseIntakePanel";
@@ -10,236 +10,164 @@ import NotificationPanel from "../components/NotificationPanel";
 import ActiveCasesTable from "../components/ActiveCasesTable";
 import EventFlow from "../components/EventFlow";
 
+const API_BASE = "http://127.0.0.1:8000";
+const POLL_INTERVAL_MS = 5000;
+
+// ---------------------------------------------------------------------------
+// Map API case shape → Dashboard component shape
+// ---------------------------------------------------------------------------
+const URGENCY_TO_SEVERITY = {
+  CRITICAL: "Critical",
+  HIGH: "High",
+  MEDIUM: "Medium",
+  LOW: "Stable",
+};
+
+const SOURCE_TYPE_LABEL = {
+  ambulance: "Ambulance",
+  public: "Public App",
+  call_center: "Call Center",
+};
+
+function deriveStage(apiCase) {
+  if (apiCase.ambulance?.id) return "ASSIGNED";
+  if ((apiCase.hospitals || []).length > 0) return "RECOMMENDED";
+  if (apiCase.severity_score > 0) return "TRIAGED";
+  return "CREATED";
+}
+
+function transformCase(apiCase) {
+  const urgency = (apiCase.urgency_level || "").toUpperCase();
+  return {
+    id: apiCase.case_id,
+    source: SOURCE_TYPE_LABEL[apiCase.source_type] || apiCase.source_type,
+    timestamp: apiCase.timestamp
+      ? new Date(apiCase.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "--:--",
+    severity: URGENCY_TO_SEVERITY[urgency] || urgency,
+    stage: deriveStage(apiCase),
+    location: {
+      lat: apiCase.latitude ?? 18.5204,
+      lng: apiCase.longitude ?? 73.8567,
+      label: apiCase.latitude
+        ? `${Number(apiCase.latitude).toFixed(4)}, ${Number(apiCase.longitude).toFixed(4)}`
+        : "Unknown",
+    },
+    symptoms: [],
+    vitals: {
+      spo2: apiCase.spo2 ?? "--",
+      hr: "--",
+      bp: apiCase.systolic_bp ? `${apiCase.systolic_bp}/--` : "--/--",
+    },
+    requiredResources: [
+      apiCase.required_specialist,
+      apiCase.needs_icu ? "ICU" : null,
+    ].filter(Boolean),
+    ambulance: apiCase.ambulance
+      ? {
+          id: apiCase.ambulance.id,
+          status: apiCase.ambulance.status,
+          lat: apiCase.ambulance.latitude,
+          lng: apiCase.ambulance.longitude,
+          eta: apiCase.ambulance.eta_to_patient,
+        }
+      : { id: null, status: "available" },
+    hospitals: (apiCase.hospitals || []).map((h) => ({
+      id: h.hospital_id,
+      name: h.hospital_name,
+      latitude: h.latitude,
+      longitude: h.longitude,
+      eta: h.eta,
+      icu: h.available_icu_beds,
+      ventilators: h.available_icu_beds,
+      load: Math.round(h.load_percentage ?? 0),
+      compatibility: (h.compatibility || "risky").toLowerCase(),
+      score: h.score,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
 export default function Dashboard() {
-  const initialCases = useMemo(
-    () => [
-      {
-        id: "C-24101",
-        source: "Ambulance",
-        timestamp: "14:02",
-        severity: "Critical",
-        stage: "TRIAGED",
-        location: { x: 26, y: 58, label: "Sector 14 Junction" },
-        symptoms: ["Chest pain", "Breathlessness"],
-        vitals: { spo2: 82, hr: 132, bp: "84/58" },
-        requiredResources: ["ICU", "Ventilator", "Cardiologist"],
-        ambulance: { id: "AMB-12", status: "en route" },
-        notification: "Sent",
-        hospitals: [
-          {
-            id: "H-1",
-            name: "City Trauma Institute",
-            eta: 9,
-            icu: 3,
-            ventilators: 2,
-            load: 68,
-            compatibility: "full",
-            score: 14,
-            position: { x: 72, y: 32 },
-          },
-          {
-            id: "H-2",
-            name: "Metro General",
-            eta: 6,
-            icu: 1,
-            ventilators: 1,
-            load: 84,
-            compatibility: "partial",
-            score: 17,
-            position: { x: 60, y: 74 },
-          },
-          {
-            id: "H-3",
-            name: "NorthCare Multi-Speciality",
-            eta: 12,
-            icu: 6,
-            ventilators: 5,
-            load: 49,
-            compatibility: "full",
-            score: 18,
-            position: { x: 82, y: 66 },
-          },
-        ],
-      },
-      {
-        id: "C-24102",
-        source: "Public App",
-        timestamp: "14:05",
-        severity: "High",
-        stage: "RECOMMENDED",
-        location: { x: 38, y: 42, label: "NH44 Flyover" },
-        symptoms: ["Head injury", "Disorientation"],
-        vitals: { spo2: 91, hr: 118, bp: "102/66" },
-        requiredResources: ["CT Scan", "Neurosurgeon"],
-        ambulance: { id: null, status: "available" },
-        notification: "Not Sent",
-        hospitals: [
-          {
-            id: "H-4",
-            name: "Apex Neuro Center",
-            eta: 11,
-            icu: 2,
-            ventilators: 2,
-            load: 62,
-            compatibility: "full",
-            score: 13,
-            position: { x: 70, y: 47 },
-          },
-          {
-            id: "H-5",
-            name: "State Civil Hospital",
-            eta: 7,
-            icu: 0,
-            ventilators: 1,
-            load: 88,
-            compatibility: "risky",
-            score: 23,
-            position: { x: 57, y: 61 },
-          },
-          {
-            id: "H-6",
-            name: "Lifeline Medical Hub",
-            eta: 13,
-            icu: 5,
-            ventilators: 4,
-            load: 52,
-            compatibility: "full",
-            score: 16,
-            position: { x: 84, y: 73 },
-          },
-        ],
-      },
-      {
-        id: "C-24103",
-        source: "Call Center",
-        timestamp: "14:08",
-        severity: "Medium",
-        stage: "CREATED",
-        location: { x: 18, y: 30, label: "Old City Market" },
-        symptoms: ["Fracture suspicion", "Pain"],
-        vitals: { spo2: 96, hr: 102, bp: "116/76" },
-        requiredResources: ["Orthopedic", "X-Ray"],
-        ambulance: { id: null, status: "available" },
-        notification: "Not Sent",
-        hospitals: [
-          {
-            id: "H-7",
-            name: "Regional Ortho Unit",
-            eta: 8,
-            icu: 1,
-            ventilators: 0,
-            load: 55,
-            compatibility: "full",
-            score: 12,
-            position: { x: 48, y: 35 },
-          },
-          {
-            id: "H-8",
-            name: "Central District Hospital",
-            eta: 5,
-            icu: 0,
-            ventilators: 0,
-            load: 81,
-            compatibility: "partial",
-            score: 18,
-            position: { x: 43, y: 48 },
-          },
-          {
-            id: "H-9",
-            name: "Pioneer MedCare",
-            eta: 12,
-            icu: 3,
-            ventilators: 2,
-            load: 40,
-            compatibility: "full",
-            score: 15,
-            position: { x: 74, y: 26 },
-          },
-        ],
-      },
-    ],
-    []
-  );
-
-  const [cases, setCases] = useState(initialCases);
-  const [selectedCaseId, setSelectedCaseId] = useState(initialCases[0].id);
+  const [cases, setCases] = useState([]);
+  const [selectedCaseId, setSelectedCaseId] = useState(null);
+  const [selectedHospitalsByCase, setSelectedHospitalsByCase] = useState({});
   const [syncClock, setSyncClock] = useState(new Date());
-  const [selectedHospitalsByCase, setSelectedHospitalsByCase] = useState(() => ({
-    [initialCases[0].id]: initialCases[0].hospitals[0].id,
-    [initialCases[1].id]: initialCases[1].hospitals[0].id,
-    [initialCases[2].id]: initialCases[2].hospitals[0].id,
-  }));
+  const [apiError, setApiError] = useState(false);
+  const hasInitialized = useRef(false);
 
+  // Live clock
   useEffect(() => {
-    const clockTimer = setInterval(() => {
-      setSyncClock(new Date());
-    }, 1000);
-
-    return () => clearInterval(clockTimer);
+    const t = setInterval(() => setSyncClock(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
+  // Poll /api/cases/ every 5 s
   useEffect(() => {
-    const stageOrder = ["CREATED", "TRIAGED", "RECOMMENDED", "ASSIGNED", "NOTIFIED"];
+    const fetchCases = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/cases/`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const transformed = data.map(transformCase);
+        setApiError(false);
 
-    const timer = setInterval(() => {
-      setCases((prevCases) =>
-        prevCases.map((item, index) => {
-          const currentStageIndex = stageOrder.indexOf(item.stage);
-          const shouldAdvance = Math.random() > 0.7;
-          const nextStage =
-            shouldAdvance && currentStageIndex < stageOrder.length - 1
-              ? stageOrder[currentStageIndex + 1]
-              : item.stage;
+        // Auto-select first case and default hospital on first load
+        if (!hasInitialized.current && transformed.length > 0) {
+          setSelectedCaseId(transformed[0].id);
+          const defaults = {};
+          transformed.forEach((c) => {
+            if (c.hospitals.length > 0) defaults[c.id] = c.hospitals[0].id;
+          });
+          setSelectedHospitalsByCase(defaults);
+          hasInitialized.current = true;
+        } else {
+          // Keep defaults for any new cases that arrive
+          setSelectedHospitalsByCase((prev) => {
+            const updated = { ...prev };
+            transformed.forEach((c) => {
+              if (!updated[c.id] && c.hospitals.length > 0) {
+                updated[c.id] = c.hospitals[0].id;
+              }
+            });
+            return updated;
+          });
+        }
 
-          const hospitals = item.hospitals.map((hospital) => ({
-            ...hospital,
-            eta: Math.max(3, hospital.eta + (Math.random() > 0.5 ? 1 : -1)),
-            load: Math.min(96, Math.max(32, hospital.load + (Math.random() > 0.5 ? 2 : -2))),
-          }));
+        setCases(transformed);
+      } catch (err) {
+        console.error("[Dashboard] API fetch failed:", err);
+        setApiError(true);
+      }
+    };
 
-          const notification =
-            nextStage === "NOTIFIED"
-              ? "Preparing"
-              : nextStage === "ASSIGNED"
-              ? "Acknowledged"
-              : item.notification;
-
-          if (index === 0) {
-            return {
-              ...item,
-              stage: nextStage,
-              notification,
-              hospitals,
-            };
-          }
-
-          return {
-            ...item,
-            stage: nextStage,
-            hospitals,
-          };
-        })
-      );
-    }, 5500);
-
-    return () => clearInterval(timer);
+    fetchCases();
+    const interval = setInterval(fetchCases, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
   }, []);
 
+  // Derived views
   const selectedCase = useMemo(
-    () => cases.find((entry) => entry.id === selectedCaseId) || cases[0],
+    () => cases.find((c) => c.id === selectedCaseId) || cases[0] || null,
     [cases, selectedCaseId]
   );
 
-  const selectedHospitalId = selectedHospitalsByCase[selectedCase?.id];
-  const selectedHospital = selectedCase?.hospitals.find((h) => h.id === selectedHospitalId) || null;
+  const selectedHospitalId = selectedCase ? selectedHospitalsByCase[selectedCase.id] : null;
+  const selectedHospital =
+    selectedCase?.hospitals.find((h) => h.id === selectedHospitalId) || null;
 
   const incomingCases = useMemo(
-    () => cases.filter((item) => item.stage === "CREATED" || item.stage === "TRIAGED"),
+    () => cases.filter((c) => c.stage === "CREATED" || c.stage === "TRIAGED"),
     [cases]
   );
 
   const activeCases = useMemo(
-    () => cases.filter((item) => ["TRIAGED", "RECOMMENDED", "ASSIGNED", "NOTIFIED"].includes(item.stage)),
+    () =>
+      cases.filter((c) =>
+        ["TRIAGED", "RECOMMENDED", "ASSIGNED", "NOTIFIED"].includes(c.stage)
+      ),
     [cases]
   );
 
@@ -250,30 +178,49 @@ export default function Dashboard() {
     }));
   };
 
-  const onAssignAmbulance = () => {
-    setCases((prevCases) =>
-      prevCases.map((item) => {
-        if (item.id !== selectedCase.id || item.ambulance.id) {
-          return item;
-        }
-
-        const generatedId = `AMB-${Math.floor(20 + Math.random() * 79)}`;
-        return {
-          ...item,
-          stage: "ASSIGNED",
-          ambulance: {
-            id: generatedId,
-            status: "en route",
-          },
-          notification: selectedHospital ? "Sent" : "Not Sent",
-        };
-      })
-    );
+  // Phase 1 Smart Dispatch — POST /api/ambulances/dispatch/
+  const onAssignAmbulance = async () => {
+    if (!selectedCase || selectedCase.ambulance?.id) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/ambulances/dispatch/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          case_id: selectedCase.id,
+          latitude: selectedCase.location.lat,
+          longitude: selectedCase.location.lng,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        console.error("[Dashboard] Dispatch error:", err);
+        return;
+      }
+      const data = await res.json();
+      // Optimistically update UI before next poll
+      setCases((prev) =>
+        prev.map((c) => {
+          if (c.id !== selectedCase.id) return c;
+          return {
+            ...c,
+            stage: "ASSIGNED",
+            ambulance: {
+              id: data.ambulance_id,
+              status: "dispatched",
+              lat: data.ambulance_lat,
+              lng: data.ambulance_lng,
+              eta: data.eta_to_patient,
+            },
+          };
+        })
+      );
+    } catch (err) {
+      console.error("[Dashboard] Dispatch failed:", err);
+    }
   };
 
   return (
     <Box className="command-shell">
-
       <Box className="ambient-glow ambient-glow-left" />
       <Box className="ambient-glow ambient-glow-right" />
 
@@ -294,7 +241,10 @@ export default function Dashboard() {
           <Chip label={`Selected ${selectedCase?.id || "--"}`} color="secondary" />
           <Chip label={`${activeCases.length} Active`} color="error" />
           <Chip label={`${incomingCases.length} Incoming`} color="warning" />
-          <Chip label={`Live Sync ${syncClock.toLocaleTimeString()}`} color="success" />
+          <Chip
+            label={apiError ? "API Offline" : `Live Sync ${syncClock.toLocaleTimeString()}`}
+            color={apiError ? "default" : "success"}
+          />
           <Chip label={`Tracking ${cases.length} Cases`} color="info" />
         </Box>
       </Box>

@@ -390,3 +390,31 @@ body {
     overflow: visible;
   }
 }
+/* Ensure the Leaflet container matches your theme */
+.leaflet-container {
+  font-family: inherit;
+  border-radius: 12px;
+}
+
+/* Fix for custom markers appearing in Leaflet */
+.leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Keep markers above the road lines */
+.leaflet-marker-icon {
+  z-index: 1000 !important;
+}
+
+/* Maintain the "Rajdhani" font in popups if used */
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--panel) !important;
+  color: var(--text-main) !important;
+  border: 1px solid var(--line);
+}
+
+/* Optimize Map Surface for the new library */
+.map-surface {
+  background: var(--bg-2) !important; /* Fallback while tiles load */
+}

@@ -121,27 +121,34 @@ def recommend_hospitals(case_id: str, patient_location: CoordinatesModel, requir
         distance = compute_distance_km(patient_location, static_item.location)
         traffic = "high" if distance > 15 else "medium" if distance > 6 else "low"
         eta = compute_eta_minutes(distance_km=distance, speed_kmph=35.0, traffic_level=traffic)
-        eta = max(eta, 9)
+        eta = max(eta, 5)
         score = _hospital_score(eta, dynamic_item.current_load_percentage, dynamic_item.avg_intake_delay)
+        available_icu = dynamic_item.availability.available_ICU_beds
 
         risk_flags: List[str] = []
         if compatibility != "full":
-            risk_flags.append("partial_resource_match")
+            risk_flags.append("Limited resource match (ICU or ventilator constraint)")
         if dynamic_item.current_load_percentage >= 55:
-            risk_flags.append("er_load_moderate")
+            risk_flags.append("Moderate ER load — expect slower intake")
         if dynamic_item.current_load_percentage > 85:
-            risk_flags.append("high_load")
+            risk_flags.append("High load — critical intake risk")
         if dynamic_item.status == "emergency_only":
-            risk_flags.append("restricted_intake")
+            risk_flags.append("Restricted intake — emergency cases only")
         if dynamic_item.avg_intake_delay >= 10:
-            risk_flags.append("intake_delay_present")
+            risk_flags.append(f"Expected intake delay (~{dynamic_item.avg_intake_delay} min)")
+        if available_icu == 0:
+            risk_flags.append("No ICU beds available")
+        elif available_icu == 1:
+            risk_flags.append("Last ICU bed — may be reserved for critical cases")
         if not risk_flags:
-            risk_flags.append("minor_operational_variability")
+            risk_flags.append("Operationally stable — no active risk flags")
 
         candidates.append(
             HospitalRecommendationItemModel(
                 hospital_id=static_item.hospital_id,
                 hospital_name=static_item.hospital_name,
+                latitude=static_item.location.latitude,
+                longitude=static_item.location.longitude,
                 eta=eta,
                 distance_km=distance,
                 compatibility=compatibility,
@@ -149,9 +156,9 @@ def recommend_hospitals(case_id: str, patient_location: CoordinatesModel, requir
                 resource_match=resource_match,
                 hospital_state=HospitalStateModel(
                     available_icu_beds=available_icu,
-                    load_percentage=dynamic_item.current_load_percentage,
+                    load_percentage=round(dynamic_item.current_load_percentage, 2),
                     intake_delay=dynamic_item.avg_intake_delay,
-                    readiness_score=dynamic_item.readiness_score,
+                    readiness_score=round(dynamic_item.readiness_score, 2),
                 ),
                 risk_flags=risk_flags,
             )

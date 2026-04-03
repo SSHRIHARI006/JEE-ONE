@@ -89,9 +89,9 @@ class AmbulanceAssignment(models.Model):
         db_table = 'ambulance_assignment'
 
 class EventLogs(models.Model):
-    event_id = models.CharField(primary_key=True, max_length=50)
+    event_id = models.CharField(primary_key=True, max_length=100)
     case = models.ForeignKey(EmergencyCases, on_delete=models.CASCADE)
-    event_type = models.CharField(max_length=50)   # e.g., 'CREATED'
+    event_type = models.CharField(max_length=100)  # e.g., 'CREATED', 'BLOCKCHAIN_SIGNED'
     timestamp = models.DateTimeField()
 
     class Meta:

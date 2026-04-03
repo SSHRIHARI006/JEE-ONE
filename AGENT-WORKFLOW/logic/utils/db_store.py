@@ -247,7 +247,7 @@ def persist_core_outputs(
 
     cursor.execute(
         """
-        INSERT INTO triage (case_id, severity, urgency, needs_icu, specialist)
+        INSERT INTO triage (case_id, severity_score, urgency_level, needs_icu, required_specialist)
         VALUES (%s, %s, %s, %s, %s)
         """,
         (case_id, severity, urgency, int(needs_icu), specialist),
@@ -277,7 +277,7 @@ def persist_core_outputs(
     for event in events:
         cursor.execute(
             """
-            INSERT INTO event_logs (event_id, case_id, event, timestamp)
+            INSERT INTO event_logs (event_id, case_id, event_type, timestamp)
             VALUES (%s, %s, %s, %s)
             """,
             (f"ev_{uuid.uuid4().hex[:16]}", case_id, event, now_value),
@@ -397,7 +397,7 @@ def persist_batch_result(
     cursor.execute("DELETE FROM triage WHERE case_id = %s", (case_id,))
     cursor.execute(
         """
-        INSERT INTO triage (case_id, severity, urgency, needs_icu, specialist)
+        INSERT INTO triage (case_id, severity_score, urgency_level, needs_icu, required_specialist)
         VALUES (%s, %s, %s, %s, %s)
         """,
         (case_id, severity, urgency, int(severity >= 7), specialist),
@@ -443,7 +443,7 @@ def persist_batch_result(
     for event in events:
         cursor.execute(
             """
-            INSERT INTO event_logs (event_id, case_id, event, timestamp)
+            INSERT INTO event_logs (event_id, case_id, event_type, timestamp)
             VALUES (%s, %s, %s, %s)
             """,
             (f"ev_{uuid.uuid4().hex[:16]}", case_id, event, now_value),

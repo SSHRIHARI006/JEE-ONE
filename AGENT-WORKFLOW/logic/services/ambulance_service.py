@@ -11,7 +11,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def find_nearest_available_ambulance(patient_location: CoordinatesModel) -> Optional[AmbulanceModel]:
+def find_nearest_available_ambulance(
+    patient_location: CoordinatesModel,
+    exclude_ids: Optional[set] = None,
+) -> Optional[AmbulanceModel]:
     rows = load_ambulances()
     ambulances = [
         AmbulanceModel(
@@ -26,7 +29,10 @@ def find_nearest_available_ambulance(patient_location: CoordinatesModel) -> Opti
         )
         for row in rows
     ]
-    available = [a for a in ambulances if a.status == "available"]
+    available = [
+        a for a in ambulances
+        if a.status == "available" and (exclude_ids is None or a.ambulance_id not in exclude_ids)
+    ]
     if not available:
         return None
 
@@ -36,8 +42,12 @@ def find_nearest_available_ambulance(patient_location: CoordinatesModel) -> Opti
     return available[0]
 
 
-def assign_ambulance(case_id: str, patient_location: CoordinatesModel) -> Optional[AmbulanceAssignmentModel]:
-    ambulance = find_nearest_available_ambulance(patient_location)
+def assign_ambulance(
+    case_id: str,
+    patient_location: CoordinatesModel,
+    exclude_ids: Optional[set] = None,
+) -> Optional[AmbulanceAssignmentModel]:
+    ambulance = find_nearest_available_ambulance(patient_location, exclude_ids=exclude_ids)
     if ambulance is None:
         return None
 

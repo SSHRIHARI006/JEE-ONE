@@ -1,3 +1,4 @@
+import uuid
 from typing import Dict
 
 from logic.utils.claude_client import extract_structured_data
@@ -14,7 +15,7 @@ def run_input_agent(input_text: str) -> Dict:
             return validate_patient_payload(second_try)
         except Exception:
             return validate_patient_payload({
-                "case_id": "case-fallback",
+                "case_id": f"case-{uuid.uuid4().hex[:8]}",
                 "timestamp": "",
                 "source_type": "public",
             })

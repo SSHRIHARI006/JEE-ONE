@@ -15,6 +15,20 @@ def _to_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def validate_patient_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     safe_payload = dict(payload or {})
     safe_payload["case_id"] = str(safe_payload.get("case_id") or "")
@@ -26,25 +40,25 @@ def validate_patient_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     demographics = safe_payload.get("demographics") or {}
     safe_payload["demographics"] = {
-        "age": int(demographics.get("age") or 0),
+        "age": _to_int(demographics.get("age")),
         "gender": str(demographics.get("gender") or "unknown"),
-        "weight": float(demographics.get("weight") or 0.0),
+        "weight": _to_float(demographics.get("weight")),
     }
 
     location = safe_payload.get("location") or {}
     safe_payload["location"] = {
-        "latitude": float(location.get("latitude") or 0.0),
-        "longitude": float(location.get("longitude") or 0.0),
+        "latitude": _to_float(location.get("latitude")),
+        "longitude": _to_float(location.get("longitude")),
     }
 
     vitals = safe_payload.get("vitals") or {}
     safe_payload["vitals"] = {
-        "heart_rate": int(vitals.get("heart_rate") or 0),
-        "systolic_bp": int(vitals.get("systolic_bp") or 0),
-        "diastolic_bp": int(vitals.get("diastolic_bp") or 0),
-        "spo2": float(vitals.get("spo2") or 0.0),
-        "respiratory_rate": int(vitals.get("respiratory_rate") or 0),
-        "temperature": float(vitals.get("temperature") or 0.0),
+        "heart_rate": _to_int(vitals.get("heart_rate")),
+        "systolic_bp": _to_int(vitals.get("systolic_bp")),
+        "diastolic_bp": _to_int(vitals.get("diastolic_bp")),
+        "spo2": _to_float(vitals.get("spo2")),
+        "respiratory_rate": _to_int(vitals.get("respiratory_rate")),
+        "temperature": _to_float(vitals.get("temperature")),
     }
 
     flags = safe_payload.get("condition_flags") or {}
@@ -56,8 +70,8 @@ def validate_patient_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     safe_payload["symptoms"] = [str(x) for x in (safe_payload.get("symptoms") or [])]
     safe_payload["injury_type"] = str(safe_payload.get("injury_type") or "unknown")
-    safe_payload["pain_level"] = int(safe_payload.get("pain_level") or 0)
-    safe_payload["time_since_incident"] = int(safe_payload.get("time_since_incident") or 0)
+    safe_payload["pain_level"] = _to_int(safe_payload.get("pain_level"))
+    safe_payload["time_since_incident"] = _to_int(safe_payload.get("time_since_incident"))
 
     medical_context = safe_payload.get("medical_context") or {}
     safe_payload["medical_context"] = {
@@ -68,13 +82,13 @@ def validate_patient_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     triage_output = safe_payload.get("triage_output") or {}
     urgency = triage_output.get("urgency_level")
     safe_payload["triage_output"] = {
-        "severity_score": int(triage_output.get("severity_score") or 0),
+        "severity_score": _to_int(triage_output.get("severity_score")),
         "urgency_level": urgency if urgency in {"low", "medium", "high", "critical"} else "low",
         "needs_ICU": _to_bool(triage_output.get("needs_ICU"), False),
         "needs_ventilator": _to_bool(triage_output.get("needs_ventilator"), False),
         "needs_surgery": _to_bool(triage_output.get("needs_surgery"), False),
         "required_specialist": str(triage_output.get("required_specialist") or "general"),
-        "estimated_time_to_critical": int(triage_output.get("estimated_time_to_critical") or 0),
+        "estimated_time_to_critical": _to_int(triage_output.get("estimated_time_to_critical")),
     }
 
     validated = PatientEmergencyModel(**safe_payload)

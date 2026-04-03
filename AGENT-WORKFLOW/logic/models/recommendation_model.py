@@ -19,6 +19,8 @@ class HospitalStateModel(BaseModel):
 class HospitalRecommendationItemModel(BaseModel):
     hospital_id: str
     hospital_name: str
+    latitude: float = 0.0
+    longitude: float = 0.0
     eta: int = 0
     distance_km: float = 0.0
     compatibility: Literal["full", "partial", "risky"] = "risky"

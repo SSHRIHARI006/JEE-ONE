@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../core/app_colors.dart';
+import '../services/api_service.dart';
 import '../services/mapbox_service.dart';
 import '../widgets/app_page_header.dart';
 import '../widgets/app_shell_scaffold.dart';
@@ -31,9 +32,36 @@ class _NavigationScreenState extends State<NavigationScreen> {
   late double hospitalLat;
   late double hospitalLng;
 
-  // Source point (patient / ambulance current location)
-  final double patientLat = 18.521;
-  final double patientLng = 73.812;
+  // Patient / ambulance live GPS — resolved in initState, fallback to Pune centre
+  double patientLat = 18.521;
+  double patientLng = 73.812;
+
+  @override
+  void initState() {
+    super.initState();
+    _initPatientLocation();
+  }
+
+  bool _hasDistinctPoints(List<LatLng> pts) {
+    if (pts.length < 2) return false;
+    // Reject any point outside geographic bounds (catches decoder overflow)
+    if (pts.any((p) => p.latitude.abs() > 90 || p.longitude.abs() > 180)) {
+      return false;
+    }
+    return pts.any((p) =>
+        p.latitude != pts.first.latitude ||
+        p.longitude != pts.first.longitude);
+  }
+
+  Future<void> _initPatientLocation() async {
+    final pos = await ApiService.getCurrentPosition();
+    if (pos != null && mounted) {
+      setState(() {
+        patientLat = pos.latitude;
+        patientLng = pos.longitude;
+      });
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -46,8 +74,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
     fullResponse = navData?['fullResponse'] as Map<String, dynamic>?;
 
     hospitalName = hospital?['name']?.toString() ?? 'Selected Hospital';
-    eta = hospital?['eta'] ?? 0;
-    distance = hospital?['distance_km'] ?? 0;
+    eta = (hospital?['eta'] as num?)?.toInt() ?? 0;
+    distance = (hospital?['distance_km'] as num?) ?? 0;
     explanation = hospital?['explanation']?.toString() ?? 'Route ready';
 
     hospitalLat = (hospital?['latitude'] as num?)?.toDouble() ?? 18.5015;
@@ -60,6 +88,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   Future<void> _loadRoute() async {
     try {
+      // Fetch Mapbox driving route
       final points = await MapboxService.getRoute(
         startLat: patientLat,
         startLng: patientLng,
@@ -67,15 +96,26 @@ class _NavigationScreenState extends State<NavigationScreen> {
         endLng: hospitalLng,
       );
 
-      if (!mounted) return;
+      // Refine ETA with ORS Matrix
+      final matrix = await OrsService.getEtas(
+        originLat: patientLat,
+        originLng: patientLng,
+        destinations: [
+          {'latitude': hospitalLat, 'longitude': hospitalLng},
+        ],
+      );
 
+      if (!mounted) return;
       setState(() {
         routePoints = points;
         isLoadingRoute = false;
+        if (matrix != null) {
+          eta = matrix.etaMinutes(0);
+          distance = matrix.distanceKm(0);
+        }
       });
     } catch (e) {
       if (!mounted) return;
-
       setState(() {
         routeError = e.toString();
         isLoadingRoute = false;
@@ -182,15 +222,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
                                   'id': 'mapbox/streets-v11',
                                 },
                               ),
-                              PolylineLayer(
-                                polylines: [
-                                  Polyline(
-                                    points: routePoints,
-                                    strokeWidth: 5,
-                                    color: AppColors.primary,
-                                  ),
-                                ],
-                              ),
+                              if (_hasDistinctPoints(routePoints))
+                                PolylineLayer(
+                                  polylines: [
+                                    Polyline(
+                                      points: routePoints,
+                                      strokeWidth: 5,
+                                      color: AppColors.primary,
+                                    ),
+                                  ],
+                                ),
                               MarkerLayer(
                                 markers: [
                                   Marker(
@@ -390,7 +431,7 @@ class _RouteStatCard extends StatelessWidget {
             height: 42,
             width: 42,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: color, size: 20),

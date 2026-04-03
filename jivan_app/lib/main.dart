@@ -13,6 +13,8 @@ import 'screens/navigation_screen.dart';
 import 'screens/handover_screen.dart';
 import 'screens/biometric_screen.dart';
 import 'screens/explainability_dashboard_screen.dart';
+import 'screens/mapbox_screen.dart';
+import 'screens/public_result_screen.dart';
 
 void main() {
   runApp(const JeevanApp());
@@ -70,6 +72,15 @@ class JeevanApp extends StatelessWidget {
         GoRoute(
           path: '/explainability',
           builder: (context, state) => const ExplainabilityDashboardScreen(),
+        ),
+        GoRoute(
+          path: '/mapbox',
+          builder: (context, state) => const MapboxScreen(),
+        ),
+        GoRoute(
+          path: '/public-result',
+          builder: (context, state) =>
+              PublicResultScreen(routeExtra: state.extra),
         ),
       ],
     );

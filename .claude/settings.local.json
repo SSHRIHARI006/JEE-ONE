@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python -c ':*)",
+      "Bash(grep -E \"\\\\\\\\.dart$\")",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}

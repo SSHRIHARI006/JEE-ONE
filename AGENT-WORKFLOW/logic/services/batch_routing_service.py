@@ -1,5 +1,6 @@
+import math
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from logic.agents.explanation_agent import run_explanation_agent
 from logic.models.ambulance_model import AmbulanceAssignmentModel
@@ -10,6 +11,10 @@ from logic.services.hospital_service import recommend_hospitals
 from logic.services.triage_service import evaluate_triage
 from logic.utils.db_store import load_critical_batch_patients, persist_batch_result
 
+# Lower score = better (ETA + load + delay weighted sum)
+_PARTIAL_COMPATIBILITY_PENALTY = 20.0
+_RISKY_COMPATIBILITY_PENALTY   = 40.0
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -19,86 +24,124 @@ def _batch_penalty(
     candidate: HospitalRecommendationItemModel,
     assigned_count: int,
     total_patients: int,
+    max_per_hospital: int,
 ) -> float:
-    w_load = 10.0
-    w_capacity = 12.0
-    w_saturation = 14.0
+    """
+    Returns a penalty added to a hospital's base score to bias against
+    overloaded or already-saturated hospitals during batch assignment.
+    Higher penalty = less likely to be chosen.
+    """
+    # Penalise high ER load proportionally
+    load_penalty = (candidate.hospital_state.load_percentage / 100.0) * 10.0
 
-    overload_penalty = (candidate.hospital_state.load_percentage / 100.0) * w_load
-
-    remaining_icu = candidate.hospital_state.available_icu_beds
+    # Penalise scarce ICU capacity — protect last beds for critical patients
+    icu = candidate.hospital_state.available_icu_beds
     capacity_penalty = 0.0
-    if remaining_icu <= 0:
-        capacity_penalty += 30.0
-    elif remaining_icu == 1:
-        capacity_penalty += 18.0
-    elif remaining_icu == 2:
+    if icu <= 0:
+        capacity_penalty += 35.0       # Full — only use as last resort
+    elif icu == 1:
+        capacity_penalty += 20.0       # Reserve for highest severity
+    elif icu == 2:
         capacity_penalty += 8.0
 
+    # Penalise intake delays
     if candidate.hospital_state.intake_delay >= 15:
-        capacity_penalty += 8.0
+        capacity_penalty += 10.0
     elif candidate.hospital_state.intake_delay >= 10:
-        capacity_penalty += 4.0
+        capacity_penalty += 5.0
 
+    # Compatibility penalty — strongly discourage partial/risky assignments
     if candidate.compatibility == "partial":
-        capacity_penalty += 7.0
+        capacity_penalty += _PARTIAL_COMPATIBILITY_PENALTY
     elif candidate.compatibility == "risky":
-        capacity_penalty += 14.0
+        capacity_penalty += _RISKY_COMPATIBILITY_PENALTY
 
-    future_penalty = 0.0
-    if remaining_icu <= 1:
-        future_penalty += 20.0
-    elif remaining_icu == 2:
-        future_penalty += 8.0
+    # Saturation penalty — spread load across hospitals
+    saturation_ratio = assigned_count / max(max_per_hospital, 1)
+    saturation_penalty = saturation_ratio * 14.0
+    if assigned_count >= max_per_hospital:
+        saturation_penalty += 25.0    # Hard discourage — cap is about to be hit
 
-    saturation_penalty = (assigned_count / max(total_patients, 1)) * w_saturation
-    if assigned_count >= max(1, total_patients // 3):
-        saturation_penalty += 6.0
-
-    return overload_penalty + capacity_penalty + future_penalty + saturation_penalty
+    return load_penalty + capacity_penalty + saturation_penalty
 
 
 def _choose_best_candidate(
     candidates: List[HospitalRecommendationItemModel],
     assigned_counts: Dict[str, int],
     total_patients: int,
-) -> HospitalRecommendationItemModel:
-    ranked_candidates: List[tuple[float, HospitalRecommendationItemModel]] = []
-    for candidate in candidates:
-        adjusted = candidate.score + _batch_penalty(
-            candidate=candidate,
-            assigned_count=assigned_counts.get(candidate.hospital_id, 0),
+    max_per_hospital: int,
+) -> Optional[HospitalRecommendationItemModel]:
+    """
+    Re-rank candidates using batch-aware scoring and return the best pick.
+    Preference order: full compatibility with ICU → partial → risky.
+    Returns None only if all candidates are at hard cap.
+    """
+    ranked: List[tuple] = []
+    for c in candidates:
+        adjusted = c.score + _batch_penalty(
+            candidate=c,
+            assigned_count=assigned_counts.get(c.hospital_id, 0),
             total_patients=total_patients,
+            max_per_hospital=max_per_hospital,
         )
-        ranked_candidates.append((adjusted, candidate))
+        ranked.append((adjusted, c))
 
-    ranked_candidates.sort(key=lambda item: (item[0], item[1].eta, -item[1].hospital_state.readiness_score))
+    ranked.sort(key=lambda item: (
+        item[0],
+        item[1].eta,
+        -item[1].hospital_state.readiness_score,
+    ))
 
-    for _, candidate in ranked_candidates:
-        if candidate.compatibility == "full" and candidate.hospital_state.available_icu_beds > 0:
-            return candidate
+    # Prefer full match with available ICU
+    for _, c in ranked:
+        if assigned_counts.get(c.hospital_id, 0) < max_per_hospital:
+            if c.compatibility == "full" and c.hospital_state.available_icu_beds > 0:
+                return c
 
-    for _, candidate in ranked_candidates:
-        if candidate.compatibility == "partial" and candidate.hospital_state.available_icu_beds >= 0:
-            return candidate
+    # Fallback: partial match with any ICU remaining
+    for _, c in ranked:
+        if assigned_counts.get(c.hospital_id, 0) < max_per_hospital:
+            if c.compatibility == "partial" and c.hospital_state.available_icu_beds > 0:
+                return c
 
-    return ranked_candidates[0][1]
+    # Last resort: anything under cap
+    for _, c in ranked:
+        if assigned_counts.get(c.hospital_id, 0) < max_per_hospital:
+            return c
+
+    # All hospitals at cap — return best overall (overflow case)
+    return ranked[0][1] if ranked else None
 
 
 def assign_patients_batch(batch_size: int = 5) -> Dict:
     patients = load_critical_batch_patients(limit=batch_size)
-    patients.sort(key=lambda patient: (-patient.triage_output.severity_score, patient.triage_output.estimated_time_to_critical))
+
+    # Sort by severity DESC then time_to_critical ASC — most critical goes first
+    patients.sort(key=lambda p: (
+        -p.triage_output.severity_score,
+        p.triage_output.estimated_time_to_critical,
+    ))
+
+    # Max patients any single hospital can absorb (40% rule)
+    num_hospitals_estimate = 7   # from our seed data
+    max_per_hospital = max(1, math.ceil(len(patients) * 0.40))
 
     assignments: List[Dict] = []
-    assigned_counts: Dict[str, int] = {}
-    used_hospitals: Dict[str, int] = {}
+    assigned_counts: Dict[str, int] = {}   # hospital_id → patients assigned
+    used_ambulances: Set[str] = set()      # prevent same ambulance for two patients
+    hospital_distribution: Dict[str, str] = {}   # hospital_id → hospital_name
     fallback_count = 0
 
     for patient in patients:
-        triage_result = evaluate_triage(patient, {
-            "suspected_conditions": ["cardiac_event"] if "chest_pain" in patient.symptoms else ["respiratory_distress"] if "breathing_issue" in patient.symptoms else [],
+        triage_context = {
+            "suspected_conditions": (
+                ["cardiac_event"] if "chest_pain" in patient.symptoms
+                else ["respiratory_distress"] if "breathing_issue" in patient.symptoms
+                else []
+            ),
             "risk_flags": ["unconscious"] if not patient.condition_flags.conscious else [],
-        })
+        }
+        triage_result = evaluate_triage(patient, triage_context)
 
         recommendations = recommend_hospitals(
             case_id=patient.case_id,
@@ -115,24 +158,36 @@ def assign_patients_batch(batch_size: int = 5) -> Dict:
             candidates=recommendations.recommendations,
             assigned_counts=assigned_counts,
             total_patients=len(patients),
+            max_per_hospital=max_per_hospital,
         )
+        if selected is None:
+            continue
 
         if selected.compatibility != "full":
             fallback_count += 1
 
-        selected_index = next((index for index, candidate in enumerate(recommendations.recommendations) if candidate.hospital_id == selected.hospital_id), 0)
-        if selected_index != 0:
-            recommendations.recommendations.insert(0, recommendations.recommendations.pop(selected_index))
+        # Move selected to front and re-label ranks
+        recs = recommendations.recommendations
+        idx = next((i for i, c in enumerate(recs) if c.hospital_id == selected.hospital_id), 0)
+        if idx != 0:
+            recs.insert(0, recs.pop(idx))
+        recs[0].rank = 1
+        recs[0].score_label = "Batch Best"
+        for i, c in enumerate(recs[1:], start=2):
+            c.rank = i
+            c.score_label = "Batch Alternative"
 
-        recommendations.recommendations[0].rank = 1
-        recommendations.recommendations[0].score_label = "Batch Best"
-        for index, candidate in enumerate(recommendations.recommendations[1:], start=2):
-            candidate.rank = index
-            candidate.score_label = "Batch Alternative"
+        # Assign nearest ambulance not already used in this batch
+        ambulance_assignment = assign_ambulance(
+            case_id=patient.case_id,
+            patient_location=patient.location,
+            exclude_ids=used_ambulances,
+        )
+        if ambulance_assignment:
+            used_ambulances.add(ambulance_assignment.ambulance_id)
 
-        ambulance_assignment = assign_ambulance(case_id=patient.case_id, patient_location=patient.location)
-        used_hospitals[selected.hospital_id] = used_hospitals.get(selected.hospital_id, 0) + 1
         assigned_counts[selected.hospital_id] = assigned_counts.get(selected.hospital_id, 0) + 1
+        hospital_distribution[selected.hospital_id] = selected.hospital_name
 
         persist_batch_result(
             case_id=patient.case_id,
@@ -143,48 +198,69 @@ def assign_patients_batch(batch_size: int = 5) -> Dict:
             ambulance_assignment=ambulance_assignment,
             selected_hospital_id=selected.hospital_id,
             events=[
-                "CASE_CREATED",
-                "TRIAGED",
-                "RECOMMENDATION_GENERATED",
+                "CASE_CREATED", "TRIAGED", "RECOMMENDATION_GENERATED",
                 "BATCH_ASSIGNED",
                 "AMBULANCE_ASSIGNED" if ambulance_assignment else "AMBULANCE_NOT_ASSIGNED",
-                "HOSPITAL_SELECTED",
-                "HOSPITAL_NOTIFIED",
-                "IN_TRANSIT",
-                "ARRIVED",
+                "HOSPITAL_SELECTED", "HOSPITAL_NOTIFIED", "IN_TRANSIT", "ARRIVED",
             ],
             icu_decrement=1 if triage_result["requirements"]["ICU"] else 0,
             load_increment=5.0 if patient.triage_output.severity_score >= 8 else 3.0,
         )
 
-        assignments.append(
-            {
-                "case_id": patient.case_id,
-                "patient_id": patient.patient_id,
-                "hospital_id": selected.hospital_id,
-                "hospital_name": selected.hospital_name,
-                "eta": selected.eta,
-                "compatibility": selected.compatibility,
-                "score": selected.score,
-                "rank": selected.rank,
-                "score_label": selected.score_label,
-                "risk_flags": selected.risk_flags,
-                "reason": selected.explanation,
-                "ambulance": ambulance_assignment.model_dump() if ambulance_assignment else None,
-            }
-        )
+        assignments.append({
+            "case_id": patient.case_id,
+            "patient_id": patient.patient_id,
+            "severity": triage_result["severity_score"],
+            "urgency": patient.triage_output.urgency_level,
+            "hospital_id": selected.hospital_id,
+            "hospital_name": selected.hospital_name,
+            "eta_minutes": selected.eta,
+            "distance_km": selected.distance_km,
+            "compatibility": selected.compatibility,
+            "score": round(selected.score, 2),
+            "score_label": selected.score_label,
+            "hospital_state": {
+                "remaining_icu": selected.hospital_state.available_icu_beds,
+                "load_percentage": selected.hospital_state.load_percentage,
+                "intake_delay_min": selected.hospital_state.intake_delay,
+                "readiness_score": selected.hospital_state.readiness_score,
+            },
+            "risk_flags": selected.risk_flags,
+            "reason": selected.explanation,
+            "ambulance": ambulance_assignment.model_dump() if ambulance_assignment else None,
+        })
 
-    batch_summary = {
-        "batch_id": f"batch-{_now_iso()}",
-        "total_patients": len(patients),
-        "assigned_patients": len(assignments),
-        "fallback_used": fallback_count,
-        "hospitals_used": len(used_hospitals),
-        "load_balanced": len(used_hospitals) > 1,
-        "message": "Patients distributed across multiple hospitals to prevent ICU overload and reduce treatment delay.",
-    }
+    # Build a human-readable batch summary
+    num_hospitals = len(hospital_distribution)
+    full_matches = len(assignments) - fallback_count
+    dist_lines = ", ".join(
+        f"{name}: {assigned_counts[hid]} patient{'s' if assigned_counts[hid] > 1 else ''}"
+        for hid, name in hospital_distribution.items()
+    )
+    batch_message = (
+        f"{len(assignments)} patient{'s' if len(assignments) != 1 else ''} distributed across "
+        f"{num_hospitals} hospital{'s' if num_hospitals != 1 else ''}. "
+        f"{full_matches} received full-compatibility assignments. "
+        f"{fallback_count} assigned to partial-match hospitals due to capacity constraints. "
+        f"No hospital exceeded {int(max_per_hospital / max(len(patients), 1) * 100)}% of batch load. "
+        f"Distribution: {dist_lines}."
+    )
 
     return {
-        "summary": batch_summary,
+        "summary": {
+            "batch_id": f"batch-{_now_iso()}",
+            "total_patients": len(patients),
+            "assigned_patients": len(assignments),
+            "full_match_assignments": full_matches,
+            "fallback_used": fallback_count,
+            "hospitals_used": num_hospitals,
+            "load_balanced": num_hospitals > 1,
+            "max_per_hospital_cap": max_per_hospital,
+            "hospital_distribution": {
+                hid: {"name": hospital_distribution[hid], "patients_assigned": cnt}
+                for hid, cnt in assigned_counts.items()
+            },
+            "message": batch_message,
+        },
         "assignments": assignments,
     }

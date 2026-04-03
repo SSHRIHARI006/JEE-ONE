@@ -31,6 +31,13 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
   bool bleeding = true;
   bool isSubmitting = false;
 
+  // Patient identity — generated once per session
+  late String _patientId;
+
+  // GPS — resolved at startup, falls back to Pune city centre
+  double _currentLat = 18.521;
+  double _currentLng = 73.812;
+
   late stt.SpeechToText _speech;
   bool _speechAvailable = false;
   bool _isListening = false;
@@ -39,8 +46,20 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
   @override
   void initState() {
     super.initState();
+    _patientId = 'PATIENT-${DateTime.now().millisecondsSinceEpoch % 100000}';
     _speech = stt.SpeechToText();
     _initSpeech();
+    _fetchLocation();
+  }
+
+  Future<void> _fetchLocation() async {
+    final position = await ApiService.getCurrentPosition();
+    if (position != null && mounted) {
+      setState(() {
+        _currentLat = position.latitude;
+        _currentLng = position.longitude;
+      });
+    }
   }
 
   Future<void> _initSpeech() async {
@@ -80,15 +99,15 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
       });
 
       final result = await ApiService.submitSosCase(
-        patientId: 'PATIENT-882',
+        patientId: _patientId,
         inputText: _spokenText == 'Tap the mic and speak patient symptoms...'
             ? 'Severe dizziness, vomiting, can\'t walk straight'
             : _spokenText,
         spo2: int.tryParse(spo2Controller.text) ?? 94,
         systolicBp: int.tryParse(systolicController.text) ?? 175,
         diastolicBp: int.tryParse(diastolicController.text) ?? 105,
-        latitude: 18.521,
-        longitude: 73.812,
+        latitude: _currentLat,
+        longitude: _currentLng,
       );
 
       if (!mounted) return;

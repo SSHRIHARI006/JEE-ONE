@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../core/app_colors.dart';
+import '../services/api_service.dart';
 import '../widgets/app_page_header.dart';
 import '../widgets/app_shell_scaffold.dart';
 import '../widgets/primary_action_button.dart';
@@ -20,6 +21,71 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
   bool conscious = true;
   bool breathing = true;
   bool bleeding = false;
+  bool isSubmitting = false;
+
+  late String _patientId;
+  double _currentLat = 18.521;
+  double _currentLng = 73.812;
+  bool _locationFetched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _patientId = 'PATIENT-${DateTime.now().millisecondsSinceEpoch % 100000}';
+    _fetchLocation();
+  }
+
+  Future<void> _fetchLocation() async {
+    final position = await ApiService.getCurrentPosition();
+    if (position != null && mounted) {
+      setState(() {
+        _currentLat = position.latitude;
+        _currentLng = position.longitude;
+        _locationFetched = true;
+      });
+    }
+  }
+
+  Future<void> _submitCase() async {
+    final conditions = <String>[];
+    if (conscious) conditions.add('conscious');
+    if (breathing) conditions.add('breathing normally');
+    if (bleeding) conditions.add('actively bleeding');
+    final conditionText = conditions.isEmpty ? 'unknown condition' : conditions.join(', ');
+    final inputText =
+        '$selectedEmergency emergency. Patient is $conditionText. Severity: $selectedSeverity.';
+
+    try {
+      setState(() => isSubmitting = true);
+
+      final result = await ApiService.submitSosCase(
+        patientId: _patientId,
+        inputText: inputText,
+        spo2: 94,
+        systolicBp: 120,
+        diastolicBp: 80,
+        latitude: _currentLat,
+        longitude: _currentLng,
+        sourceType: 'public',
+      );
+
+      if (!mounted) return;
+      context.go('/public-result', extra: {
+        'result': result,
+        'emergency_type': selectedEmergency,
+        'conscious': conscious,
+        'breathing': breathing,
+        'bleeding': bleeding,
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => isSubmitting = false);
+    }
+  }
 
   final List<String> emergencyTypes = [
     'Accident',
@@ -79,14 +145,20 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: AppColors.border),
             ),
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.my_location, color: AppColors.info, size: 20),
-                SizedBox(width: 10),
+                Icon(
+                  Icons.my_location,
+                  color: _locationFetched ? AppColors.success : AppColors.info,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Electronic City, Bangalore',
-                    style: TextStyle(
+                    _locationFetched
+                        ? '${_currentLat.toStringAsFixed(5)}, ${_currentLng.toStringAsFixed(5)}'
+                        : 'Fetching location...',
+                    style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: AppColors.textPrimary,
@@ -94,11 +166,13 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
                   ),
                 ),
                 Text(
-                  'Auto',
+                  _locationFetched ? 'Live' : 'GPS',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.textSecondary,
+                    color: _locationFetched
+                        ? AppColors.success
+                        : AppColors.textSecondary,
                   ),
                 ),
               ],
@@ -292,9 +366,9 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
           const SizedBox(height: 26),
 
           PrimaryActionButton(
-            label: 'Start AI Triage',
+            label: isSubmitting ? 'Submitting...' : 'Start AI Triage',
             icon: Icons.arrow_forward,
-            onPressed: () => context.go('/triage-loading'),
+            onPressed: isSubmitting ? null : _submitCase,
           ),
         ],
       ),
@@ -393,7 +467,7 @@ class _ConditionTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
-        color: value ? activeColor.withOpacity(0.10) : AppColors.surface,
+        color: value ? activeColor.withValues(alpha: 0.10) : AppColors.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: value ? activeColor : AppColors.border),
       ),
@@ -415,7 +489,7 @@ class _ConditionTile extends StatelessWidget {
               ),
             ),
           ),
-          Switch(value: value, onChanged: onChanged, activeColor: activeColor),
+          Switch(value: value, onChanged: onChanged, activeThumbColor: activeColor),
         ],
       ),
     );
@@ -443,7 +517,7 @@ class _SeverityChip extends StatelessWidget {
       child: Container(
         height: 52,
         decoration: BoxDecoration(
-          color: active ? color.withOpacity(0.12) : AppColors.surface,
+          color: active ? color.withValues(alpha: 0.12) : AppColors.surface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: active ? color : AppColors.border),
         ),
@@ -489,41 +563,25 @@ class _BottomNavBar extends StatelessWidget {
 class _NavItem extends StatelessWidget {
   final IconData icon;
   final String label;
-  final bool active;
 
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    this.active = false,
-  });
+  const _NavItem({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: active ? AppColors.dangerSoft : Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: active ? AppColors.primary : AppColors.textSecondary,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 20, color: AppColors.textSecondary),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: active ? AppColors.primary : AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

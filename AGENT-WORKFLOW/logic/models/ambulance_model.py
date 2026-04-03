@@ -8,7 +8,7 @@ from logic.models.patient_model import CoordinatesModel
 class AmbulanceModel(BaseModel):
     ambulance_id: str
     current_location: CoordinatesModel = Field(default_factory=CoordinatesModel)
-    status: Literal["available", "assigned", "busy"] = "available"
+    status: Literal["available", "assigned", "busy", "dispatched"] = "available"
     assigned_case_id: str = ""
     last_updated_timestamp: str = ""
 

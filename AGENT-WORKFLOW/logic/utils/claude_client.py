@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -10,10 +11,12 @@ try:
 except Exception:
     Anthropic = None
 
+logger = logging.getLogger(__name__)
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"), override=True)
 
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+FAST_MODEL = os.getenv("ANTHROPIC_FAST_MODEL", "claude-haiku-4-5-20251001")
 
 
 def utc_iso_now() -> str:
@@ -28,7 +31,12 @@ def _get_client() -> Any:
 
 
 def _safe_json_loads(value: str) -> Dict[str, Any]:
-    parsed = json.loads(value)
+    # Strip markdown fences Claude sometimes wraps responses in
+    stripped = value.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        stripped = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+    parsed = json.loads(stripped)
     if isinstance(parsed, dict):
         return parsed
     return {}
@@ -141,6 +149,8 @@ def _heuristic_extract(input_text: str) -> Dict[str, Any]:
 def _normalize_extracted_payload(payload: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(fallback)
     merged.update({key: payload.get(key, merged.get(key)) for key in merged.keys()})
+    # Always use the heuristic case_id — Claude guesses generic IDs like "CASE-001"
+    merged["case_id"] = fallback["case_id"]
 
     location = payload.get("location") if isinstance(payload.get("location"), dict) else {}
     lat = _to_float(location.get("latitude"), fallback["location"]["latitude"])
@@ -190,7 +200,7 @@ def extract_structured_data(input_text: str) -> Dict[str, Any]:
         )
         response = client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=800,
+            max_tokens=500,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -199,8 +209,8 @@ def extract_structured_data(input_text: str) -> Dict[str, Any]:
         ).strip()
         try:
             return _normalize_extracted_payload(_safe_json_loads(content), fallback)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"[EXTRACT] Failed to parse Claude response: {exc}. Raw: {content[:200]}")
 
     return fallback
 
@@ -226,6 +236,119 @@ def interpret_triage_context(symptoms: List[str], condition_flags: Dict[str, boo
         "suspected_conditions": sorted(set(suspected_conditions)),
         "risk_flags": sorted(set(risk_flags)),
     }
+
+
+_BLOCKCHAIN_DIAGNOSTIC_SYSTEM_PROMPT = (
+    "You are a real-time Emergency Diagnostic Router. Speed is critical. "
+    "Correlate live symptoms with blockchain history. Prioritize recurrent events over new diagnoses. "
+    "Output ONLY compact JSON — no markdown, no extra text:\n"
+    '{"primary_diagnosis":"string","blockchain_correlation":"one-line: which past block caused this",'
+    '"mechanism_of_injury":"one-line mechanism","routing_priority":"Critical|High|Low",'
+    '"severity":<1-10>,"required_specialist":"string"}'
+)
+
+_DIAGNOSTIC_SYSTEM_PROMPT = (
+    "You are a real-time Emergency Diagnostic Router. Speed is critical. "
+    "Output ONLY compact JSON — no markdown, no extra text:\n"
+    '{"diagnosis":"short clinical label","diagnosis_reasoning":"one-line reasoning linking vitals/symptoms to diagnosis",'
+    '"severity":<1-10>,"required_specialist":"string"}'
+)
+
+
+def run_diagnostic_agent(
+    symptoms: List[str],
+    condition_flags: Dict[str, bool],
+    vitals: Dict[str, Any],
+    medical_history: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Calls Claude as a Senior ER Physician to produce a probable diagnosis,
+    severity score, and required specialist informed by the patient's history.
+    Returns an empty dict if the LLM is unavailable or returns invalid JSON.
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+
+    user_content = json.dumps({
+        "current_symptoms": symptoms,
+        "condition_flags": condition_flags,
+        "vitals": vitals,
+        "medical_history": medical_history,
+    }, ensure_ascii=True)
+
+    try:
+        response = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=150,
+            temperature=0,
+            system=_DIAGNOSTIC_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        content = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ).strip()
+        parsed = _safe_json_loads(content)
+        if {"diagnosis", "diagnosis_reasoning", "severity", "required_specialist"}.issubset(parsed):
+            return {
+                "diagnosis": str(parsed["diagnosis"]),
+                "diagnosis_reasoning": str(parsed["diagnosis_reasoning"]),
+                "diagnosis_severity": min(10, max(1, int(parsed["severity"]))),
+                "required_specialist": str(parsed["required_specialist"]),
+            }
+        logger.warning(f"[DIAGNOSTIC] Missing fields in response: {list(parsed.keys())}")
+    except Exception as exc:
+        logger.error(f"[DIAGNOSTIC] Claude call failed: {exc}")
+
+    return {}
+
+
+def run_blockchain_diagnostic_agent(
+    symptoms: List[str],
+    vitals: Dict[str, Any],
+    blockchain_history: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Calls Claude as a Senior Neurologist using the blockchain audit trail as
+    verified medical history. Returns an empty dict on failure.
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+
+    user_content = json.dumps({
+        "current_symptoms": symptoms,
+        "live_vitals": vitals,
+        "blockchain_history": blockchain_history,
+    }, ensure_ascii=True)
+
+    try:
+        response = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=200,
+            temperature=0,
+            system=_BLOCKCHAIN_DIAGNOSTIC_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        content = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ).strip()
+        parsed = _safe_json_loads(content)
+        required = {"primary_diagnosis", "blockchain_correlation", "mechanism_of_injury", "routing_priority"}
+        if required.issubset(parsed):
+            return {
+                "diagnosis": str(parsed["primary_diagnosis"]),
+                "blockchain_correlation": str(parsed["blockchain_correlation"]),
+                "mechanism_of_injury": str(parsed["mechanism_of_injury"]),
+                "routing_priority": str(parsed["routing_priority"]),
+                "diagnosis_severity": min(10, max(1, int(parsed.get("severity", 5)))),
+                "required_specialist": str(parsed.get("required_specialist", "general")),
+            }
+        logger.warning(f"[BLOCKCHAIN DIAGNOSTIC] Missing fields in response: {list(parsed.keys())}")
+    except Exception as exc:
+        logger.error(f"[BLOCKCHAIN DIAGNOSTIC] Claude call failed: {exc}")
+
+    return {}
 
 
 def generate_recommendation_text(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -292,3 +415,104 @@ def generate_recommendation_text(item: Dict[str, Any]) -> Dict[str, Any]:
         "cons": cons,
         "explanation": explanation,
     }
+
+
+_FIRST_AID_SYSTEM_PROMPT = (
+    "You are an emergency first aid expert writing instructions for a bystander — NOT a medic. "
+    "Generate 4-5 clear, actionable steps they should follow RIGHT NOW until the ambulance arrives. "
+    "Use plain language. No medical jargon. Each step must be something a layperson can physically do. "
+    "Output ONLY compact JSON — no markdown, no extra text:\n"
+    '{"steps":[{"title":"short action title (max 6 words)","description":"clear instruction in 1-2 sentences","priority":"critical|high|normal"}]}'
+)
+
+
+def generate_first_aid_steps(
+    diagnosis: str,
+    urgency: str,
+    condition_flags: Dict[str, Any],
+    specialist: str,
+    advice_action: str,
+) -> List[Dict[str, Any]]:
+    """
+    Calls Claude (Haiku) to produce bystander-facing first aid steps.
+    Returns an empty list if the LLM is unavailable or returns invalid JSON.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+
+    user_content = json.dumps({
+        "diagnosis": diagnosis,
+        "urgency": urgency,
+        "patient_condition": condition_flags,
+        "specialist_needed": specialist,
+        "dispatcher_advice": advice_action,
+    }, ensure_ascii=True)
+
+    try:
+        response = client.messages.create(
+            model=FAST_MODEL,
+            max_tokens=600,
+            temperature=0,
+            system=_FIRST_AID_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        content = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ).strip()
+        parsed = _safe_json_loads(content)
+        if "steps" in parsed and isinstance(parsed["steps"], list):
+            return [
+                {
+                    "title": str(s.get("title", "")),
+                    "description": str(s.get("description", "")),
+                    "priority": str(s.get("priority", "normal")),
+                }
+                for s in parsed["steps"]
+                if s.get("title") and s.get("description")
+            ]
+        logger.warning(f"[FIRST AID] Unexpected response shape: {list(parsed.keys())}")
+    except Exception as exc:
+        logger.error(f"[FIRST AID] Claude call failed: {exc}")
+
+    return []
+
+
+def generate_batch_explanations(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Generate pros/cons/explanation for ALL hospitals in a SINGLE Haiku call.
+    Returns a list in the same order as items. Falls back to rule-based per item on failure.
+    """
+    client = _get_client()
+    if client is not None and items:
+        prompt = (
+            "For each hospital in the array, produce a compact summary. "
+            "Return a JSON array in the same order with objects containing keys: "
+            "pros (array, max 2 items, each under 10 words), "
+            "cons (array, max 2 items, each under 10 words), "
+            "explanation (one sentence max 20 words). "
+            "No markdown. Input: "
+            f"{json.dumps(items, ensure_ascii=True)}"
+        )
+        try:
+            response = client.messages.create(
+                model=FAST_MODEL,
+                max_tokens=400,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            content = "".join(
+                block.text for block in response.content if getattr(block, "type", "") == "text"
+            ).strip()
+            # Strip markdown fences
+            if content.startswith("```"):
+                lines = content.splitlines()
+                content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+            parsed = json.loads(content)
+            if isinstance(parsed, list) and len(parsed) == len(items):
+                return parsed
+            logger.warning(f"[BATCH EXPLANATION] Length mismatch: got {len(parsed)}, expected {len(items)}")
+        except Exception as exc:
+            logger.error(f"[BATCH EXPLANATION] Haiku call failed: {exc}")
+
+    return [generate_recommendation_text(item) for item in items]
