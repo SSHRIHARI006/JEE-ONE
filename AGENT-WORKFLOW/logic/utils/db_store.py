@@ -4,9 +4,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
-import mysql.connector
 from dotenv import load_dotenv
 import os
+
+try:
+    import mysql.connector as _mysql_connector
+except Exception:  # pragma: no cover - runtime environment dependent
+    _mysql_connector = None
+
+try:
+    import MySQLdb as _mysqldb
+    from MySQLdb.cursors import DictCursor as _MySQLdbDictCursor
+except Exception:  # pragma: no cover - runtime environment dependent
+    _mysqldb = None
+    _MySQLdbDictCursor = None
 
 from logic.models.ambulance_model import AmbulanceAssignmentModel
 from logic.models.patient_model import PatientEmergencyModel
@@ -30,8 +41,35 @@ def _db_config() -> Dict[str, Any]:
     }
 
 
-def get_connection() -> mysql.connector.MySQLConnection:
-    return mysql.connector.connect(**_db_config())
+def get_connection():
+    cfg = _db_config()
+
+    if _mysql_connector is not None:
+        return _mysql_connector.connect(**cfg)
+
+    if _mysqldb is not None:
+        conn = _mysqldb.connect(
+            host=cfg["host"],
+            port=cfg["port"],
+            user=cfg["user"],
+            passwd=cfg["password"],
+            db=cfg["database"],
+            charset="utf8mb4",
+        )
+        conn.autocommit(False)
+        return conn
+
+    raise RuntimeError(
+        "No MySQL driver available. Install 'mysql-connector-python' or 'mysqlclient'."
+    )
+
+
+def _dict_cursor(conn):
+    if _mysql_connector is not None:
+        return conn.cursor(dictionary=True)
+    if _mysqldb is not None and _MySQLdbDictCursor is not None:
+        return conn.cursor(_MySQLdbDictCursor)
+    return conn.cursor()
 
 
 def _to_iso(value: Any) -> str:
@@ -42,7 +80,7 @@ def _to_iso(value: Any) -> str:
 
 def load_latest_patient_case() -> PatientEmergencyModel:
     conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = _dict_cursor(conn)
     cursor.execute(
         """
         SELECT ec.case_id, ec.patient_id, ec.source_type, ec.timestamp, ec.latitude, ec.longitude,
@@ -125,7 +163,7 @@ def load_latest_patient_case() -> PatientEmergencyModel:
 
 def load_hospitals_with_status() -> List[Dict[str, Any]]:
     conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = _dict_cursor(conn)
     cursor.execute(
         """
         SELECT h.hospital_id, h.hospital_name, h.latitude, h.longitude, h.hospital_type,
@@ -144,7 +182,7 @@ def load_hospitals_with_status() -> List[Dict[str, Any]]:
 
 def load_ambulances() -> List[Dict[str, Any]]:
     conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = _dict_cursor(conn)
     cursor.execute(
         """
         SELECT ambulance_id, latitude, longitude, status, last_updated_timestamp
@@ -159,7 +197,7 @@ def load_ambulances() -> List[Dict[str, Any]]:
 
 def load_hospital_coordinates(hospital_id: str) -> Optional[Dict[str, float]]:
     conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = _dict_cursor(conn)
     cursor.execute(
         """
         SELECT latitude, longitude
@@ -290,7 +328,7 @@ def persist_core_outputs(
 
 def load_critical_batch_patients(limit: int = 5) -> List[PatientEmergencyModel]:
     conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = _dict_cursor(conn)
     cursor.execute(
         """
         SELECT ec.case_id, ec.patient_id, ec.source_type, ec.timestamp, ec.latitude, ec.longitude,

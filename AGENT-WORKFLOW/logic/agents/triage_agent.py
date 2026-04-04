@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from logic.models.patient_model import PatientEmergencyModel
 from logic.utils.claude_client import (
@@ -11,6 +11,7 @@ from logic.utils.claude_client import (
 def run_triage_agent(
     patient: PatientEmergencyModel,
     blockchain_history: Optional[List[Dict]] = None,
+    scene_context: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     context = interpret_triage_context(
         symptoms=patient.symptoms,
@@ -29,6 +30,7 @@ def run_triage_agent(
             condition_flags=patient.condition_flags.model_dump(),
             vitals=patient.vitals.model_dump(),
             medical_history=patient.medical_context.model_dump(),
+            scene_context=scene_context,
         )
 
     # If Claude returned nothing, produce a heuristic diagnosis from what we know
@@ -67,6 +69,16 @@ def _heuristic_diagnosis(patient: PatientEmergencyModel, context: Dict) -> Dict:
         label = "Altered Consciousness — Unknown Cause"
         reasoning = "Unconsciousness with no known history. Neurological and trauma causes must be excluded."
         severity = 7
+        specialist = "neurology"
+    elif "neurologic_event" in conditions and "possible_stroke" in flags:
+        label = "Possible Acute Neurologic Event"
+        reasoning = "Dizziness, vomiting, and balance disturbance suggest possible posterior-circulation stroke."
+        severity = 8
+        specialist = "neurology"
+    elif "neurologic_event" in conditions:
+        label = "Acute Neurologic Syndrome"
+        reasoning = "Neurological warning symptoms present and require urgent neurologic assessment."
+        severity = 6
         specialist = "neurology"
     elif "active_bleeding" in flags:
         label = "Active Hemorrhage"

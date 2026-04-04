@@ -1,0 +1,49 @@
+﻿python.exe : [08:54:39] 
+[JIVAN BLOCKCHAIN] 
+History for PATIENT-882: 
+0 record(s).
+At line:1 char:1
++ & "C:\Users\mohap\Deskto
+p\kunal\coding journey\pro
+ject\MIT\JEE-ONE\ba ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: ([  
+  08:54:39] [JIV...2: 0   
+  record(s).:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+{
+  "fallback": false,
+  "keys": [
+    "case_id",
+    "patient_id",
+    "triage",
+    "diagnosis",
+    "decision_type",
+    "routing",
+    "alternatives",
+    "ambulance",
+    "advice",
+    "risk_flags",
+    "events",
+    "scene_context",
+    "first_aid",
+    "blockchain_history_records"
+  ],
+  "events": [
+    "CASE_CREATED",
+    "TRIAGED",
+    "DECISION_MADE",
+    "RECOMMENDATION_GENERATED",
+    "AMBULANCE_ASSIGNED",
+    "IN_TRANSIT",
+    "ARRIVED"
+  ],
+  "case_id": "case-5341468"
+}

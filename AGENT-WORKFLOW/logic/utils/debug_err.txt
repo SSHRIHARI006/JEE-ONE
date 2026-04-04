@@ -1,0 +1,20 @@
+Exception: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.0.content.0.image.source.base64: The image was specified using the image/png media type, but the image appears to be a image/webp image'}, 'request_id': 'req_011CZhuxmhcZJqeeyRLrXd5q'}
+Traceback (most recent call last):
+  File "C:\Users\mohap\Desktop\kunal\coding journey\project\MIT\JEE-ONE\AGENT-WORKFLOW\logic\utils\claude_client.py", line 477, in extract_scene_context
+    response = client.messages.create(
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mohap\Desktop\kunal\coding journey\project\MIT\JEE-ONE\backend\main_api\venv\Lib\site-packages\anthropic\_utils\_utils.py", line 282, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mohap\Desktop\kunal\coding journey\project\MIT\JEE-ONE\backend\main_api\venv\Lib\site-packages\anthropic\resources\messages\messages.py", line 996, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "C:\Users\mohap\Desktop\kunal\coding journey\project\MIT\JEE-ONE\backend\main_api\venv\Lib\site-packages\anthropic\_base_client.py", line 1364, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mohap\Desktop\kunal\coding journey\project\MIT\JEE-ONE\backend\main_api\venv\Lib\site-packages\anthropic\_base_client.py", line 1137, in request
+    raise self._make_status_error_from_response(err.response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.0.content.0.image.source.base64: The image was specified using the image/png media type, but the image appears to be a image/webp image'}, 'request_id': 'req_011CZhuxmhcZJqeeyRLrXd5q'}
+
+Model:claude-3-5-sonnet-20241022
+Key:[REDACTED]

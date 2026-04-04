@@ -1,0 +1,26 @@
+{
+  "severity_estimate": 8,
+  "mechanism_of_injury": "high-speed collision",
+  "patient_count": 1,
+  "consciousness_estimate": "unclear",
+  "visible_injuries": [
+    "head trauma",
+    "possible internal injuries"
+  ],
+  "blood_loss": {
+    "present": true,
+    "severity": "moderate",
+    "description": "visible blood on the ground near the vehicle"
+  },
+  "scene_hazards": [
+    "damaged vehicles",
+    "debris on the road"
+  ],
+  "vehicle_damage_severity": "severe",
+  "recommended_resources": [
+    "multiple ambulances",
+    "trauma team",
+    "police/fire department"
+  ],
+  "scene_summary": "This appears to be a high-speed collision involving at least one severely damaged vehicle. There is a single visible victim with unclear consciousness and signs of head trauma and possible internal injuries. Moderate blood loss is present, and the scene poses additional hazards from the damaged vehicles and debris on the road. Immediate dispatch of multiple emergency resources, including ambulances, a trauma team, and police/fire department, is recommended."
+}

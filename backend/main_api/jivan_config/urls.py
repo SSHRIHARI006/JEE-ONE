@@ -3,6 +3,7 @@ from django.urls import path
 
 from api.views import (
     SOSView,
+    SceneAnalysisView,
     HospitalsView,
     CaseDetailView,
     CasesListView,
@@ -16,6 +17,7 @@ urlpatterns = [
 
     # Emergency intake
     path('api/sos/', SOSView.as_view(), name='sos'),
+    path('api/analyze-scene/', SceneAnalysisView.as_view(), name='analyze_scene'),
 
     # Hospital catalogue
     path('api/hospitals/', HospitalsView.as_view(), name='hospitals'),

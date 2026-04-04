@@ -1,0 +1,44 @@
+﻿python.exe : [08:57:51] 
+[JIVAN BLOCKCHAIN] 
+History for PATIENT-TEST: 
+0 record(s).
+At line:1 char:1
++ & "C:\Users\mohap\Deskto
+p\kunal\coding journey\pro
+ject\MIT\JEE-ONE\ba ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: ([  
+  08:57:51] [JIV...T: 0   
+  record(s).:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+[BATCH EXPLANATION] Haiku 
+call failed: Expecting 
+value: line 1 column 1 
+(char 0)
+{
+  "fallback": false,
+  "case_id": "case-6075950",
+  "severity": 10,
+  "urgency": "CRITICAL",
+  "decision": "emergency_routing",
+  "first_aid_count": 4,
+  "events": [
+    "CASE_CREATED",
+    "TRIAGED",
+    "DECISION_MADE",
+    "RECOMMENDATION_GENERATED",
+    "AMBULANCE_ASSIGNED",
+    "IN_TRANSIT",
+    "ARRIVED"
+  ],
+  "has_routing": true,
+  "scene_context": null,
+  "routing_eta": 5
+}

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(venv/Scripts/python -c ':*)",
       "Bash(grep -E \"\\\\\\\\.dart$\")",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(venv/Scripts/python test_scene.py \"C:/Users/mohap/Downloads/accident_test.png\")"
     ]
   }
 }

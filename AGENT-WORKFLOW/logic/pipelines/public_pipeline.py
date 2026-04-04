@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Any, Dict, Optional
 
 from logic.agents.decision_router import route_decision
 from logic.agents.explanation_agent import run_explanation_agent
@@ -16,8 +16,30 @@ logger = logging.getLogger(__name__)
 _DEFAULT_LOCATION = CoordinatesModel(latitude=18.518, longitude=73.815)
 
 
-def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None, longitude=None, vitals: dict = None) -> Dict:
+def _attach_scene_to_response(
+    response: Dict[str, Any],
+    triage_eval: Dict[str, Any],
+    scene_context: Optional[Dict[str, Any]],
+) -> None:
+    """Mutates response in-place to add scene_context and event if applicable."""
+    if triage_eval.get("scene_influence_applied") and scene_context:
+        response["scene_context"] = {
+            "applied": True,
+            "severity_hint": triage_eval.get("scene_severity_hint_used"),
+            "description": scene_context.get("scene_summary", ""),
+            "visible_injuries": scene_context.get("visible_injuries", []),
+            "recommended_resources": scene_context.get("recommended_resources", []),
+            "note": "Scene trauma indicators increased severity assessment.",
+        }
+        if "SCENE_ANALYSIS_APPLIED" not in response.get("events", []):
+            response.setdefault("events", []).append("SCENE_ANALYSIS_APPLIED")
+    else:
+        response["scene_context"] = None
+
+
+def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None, longitude=None, vitals: dict = None, scene_context: Optional[Dict[str, Any]] = None) -> Dict:
     patient_data = run_input_agent(input_text)
+    patient_data.pop("scene_context", None)  # strip if present from old callers
     patient = PatientEmergencyModel(**patient_data)
 
     if latitude is not None and longitude is not None:
@@ -40,8 +62,8 @@ def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None,
     except Exception as exc:
         logger.error(f"[PIPELINE] persist_new_case failed for {patient.case_id}: {exc}")
 
-    triage_context = run_triage_agent(patient, blockchain_history=blockchain_history)
-    triage_eval = evaluate_triage(patient, triage_context)
+    triage_context = run_triage_agent(patient, blockchain_history=blockchain_history, scene_context=scene_context)
+    triage_eval = evaluate_triage(patient, triage_context, scene_context=scene_context)
     patient.triage_output = triage_eval["triage_output"]
 
     decision = route_decision(case_id=patient.case_id, severity_score=triage_eval["severity_score"])
@@ -81,6 +103,7 @@ def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None,
         "advice": None,
         "risk_flags": [],
         "events": ["CASE_CREATED", "TRIAGED", "DECISION_MADE"],
+        "scene_context": None,
     }
 
     if decision.decision_type == "advice":
@@ -146,6 +169,8 @@ def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None,
         except Exception as exc:
             logger.warning(f"[PIPELINE] first_aid generation skipped: {exc}")
             base_response["first_aid"] = []
+
+        _attach_scene_to_response(base_response, triage_eval, scene_context)
 
         try:
             persist_core_outputs(
@@ -240,6 +265,8 @@ def run_public_pipeline(input_text: str, blockchain_history=None, latitude=None,
     except Exception as exc:
         logger.warning(f"[PIPELINE] first_aid generation skipped: {exc}")
         base_response["first_aid"] = []
+
+    _attach_scene_to_response(base_response, triage_eval, scene_context)
 
     try:
         persist_core_outputs(

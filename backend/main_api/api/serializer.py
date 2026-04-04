@@ -58,6 +58,7 @@ class ActiveCaseSerializer(serializers.ModelSerializer):
     hospitals = serializers.SerializerMethodField()
     ambulance = serializers.SerializerMethodField()
     needs_icu = serializers.SerializerMethodField()
+    scene_context = serializers.SerializerMethodField()
 
     class Meta:
         model = EmergencyCases
@@ -65,7 +66,7 @@ class ActiveCaseSerializer(serializers.ModelSerializer):
             'case_id', 'patient_id', 'source_type', 'timestamp',
             'latitude', 'longitude', 'spo2', 'systolic_bp',
             'severity_score', 'urgency_level', 'required_specialist',
-            'needs_icu', 'hospitals', 'ambulance',
+            'needs_icu', 'hospitals', 'ambulance', 'scene_context',
         ]
 
     def get_hospitals(self, obj):
@@ -95,6 +96,15 @@ class ActiveCaseSerializer(serializers.ModelSerializer):
             return bool(obj.triage.needs_icu)
         except Exception:
             return False
+
+    def get_scene_context(self, obj):
+        import json
+        if obj.scene_context:
+            try:
+                return json.loads(obj.scene_context)
+            except Exception:
+                return None
+        return None
 
 
 class EmergencyCaseSerializer(serializers.ModelSerializer):

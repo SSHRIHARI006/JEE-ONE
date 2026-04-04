@@ -466,6 +466,8 @@ class PublicResultScreen extends StatelessWidget {
 
   static Color _urgencyBg(String urgency) {
     switch (urgency) {
+      case 'CRITICAL':
+        return AppColors.dangerSoft;
       case 'HIGH':
         return AppColors.dangerSoft;
       case 'MEDIUM':
@@ -479,6 +481,8 @@ class PublicResultScreen extends StatelessWidget {
 
   static Color _urgencyColor(String urgency) {
     switch (urgency) {
+      case 'CRITICAL':
+        return AppColors.primary;
       case 'HIGH':
         return AppColors.primary;
       case 'MEDIUM':

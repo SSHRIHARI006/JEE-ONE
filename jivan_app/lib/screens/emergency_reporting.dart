@@ -1,7 +1,12 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import '../core/app_colors.dart';
 import '../services/api_service.dart';
+import '../services/patient_identity_service.dart';
 import '../widgets/app_page_header.dart';
 import '../widgets/app_shell_scaffold.dart';
 import '../widgets/primary_action_button.dart';
@@ -28,11 +33,26 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
   double _currentLng = 73.812;
   bool _locationFetched = false;
 
+  // Scene photo
+  final ImagePicker _picker = ImagePicker();
+  XFile? _sceneImage;
+  bool _sceneAnalyzed = false;
+  String _statusMessage = '';
+
   @override
   void initState() {
     super.initState();
-    _patientId = 'PATIENT-${DateTime.now().millisecondsSinceEpoch % 100000}';
+    _patientId = 'PATIENT-LOCAL';
+    _initPatientId();
     _fetchLocation();
+  }
+
+  Future<void> _initPatientId() async {
+    final id = await PatientIdentityService.getOrCreatePatientId();
+    if (!mounted) return;
+    setState(() {
+      _patientId = id;
+    });
   }
 
   Future<void> _fetchLocation() async {
@@ -46,17 +66,108 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
     }
   }
 
+  Future<void> _pickFromCamera() async {
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 75,
+    );
+    if (image != null && mounted) {
+      setState(() {
+        _sceneImage = image;
+        _sceneAnalyzed = true;
+      });
+    }
+  }
+
+  Future<void> _pickFromGallery() async {
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 75,
+    );
+    if (image != null && mounted) {
+      setState(() {
+        _sceneImage = image;
+        _sceneAnalyzed = true;
+      });
+    }
+  }
+
+  void _removeImage() {
+    setState(() {
+      _sceneImage = null;
+      _sceneAnalyzed = false;
+    });
+  }
+
+  /// Detect MIME type from magic bytes
+  String _detectMimeType(List<int> bytes) {
+    if (bytes.length >= 4 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return 'image/png';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'image/webp';
+    }
+    if (bytes.length >= 4 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x38) {
+      return 'image/gif';
+    }
+    return 'image/jpeg';
+  }
+
   Future<void> _submitCase() async {
     final conditions = <String>[];
     if (conscious) conditions.add('conscious');
     if (breathing) conditions.add('breathing normally');
     if (bleeding) conditions.add('actively bleeding');
-    final conditionText = conditions.isEmpty ? 'unknown condition' : conditions.join(', ');
+    final conditionText =
+        conditions.isEmpty ? 'unknown condition' : conditions.join(', ');
     final inputText =
         '$selectedEmergency emergency. Patient is $conditionText. Severity: $selectedSeverity.';
 
     try {
-      setState(() => isSubmitting = true);
+      setState(() {
+        isSubmitting = true;
+        _statusMessage = 'Preparing submission...';
+      });
+
+      Map<String, dynamic>? sceneContext;
+
+      // Step 1: If scene photo exists, analyze it first
+      if (_sceneImage != null) {
+        setState(() => _statusMessage = '📸 Analyzing scene photo...');
+
+        final bytes = await _sceneImage!.readAsBytes();
+        final base64Image = base64Encode(bytes);
+        final mediaType = _detectMimeType(bytes);
+
+        try {
+          sceneContext = await ApiService.analyzeScene(
+            imageBase64: base64Image,
+            mediaType: mediaType,
+          );
+        } catch (e) {
+          // Scene analysis is optional — don't block SOS if it fails
+          debugPrint('[SCENE] Analysis failed: $e');
+        }
+      }
+
+      // Step 2: Submit SOS with scene context
+      setState(() => _statusMessage = '🚨 Running AI triage...');
 
       final result = await ApiService.submitSosCase(
         patientId: _patientId,
@@ -67,6 +178,7 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
         latitude: _currentLat,
         longitude: _currentLng,
         sourceType: 'public',
+        sceneContext: sceneContext,
       );
 
       if (!mounted) return;
@@ -83,7 +195,12 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
         SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
       );
     } finally {
-      if (mounted) setState(() => isSubmitting = false);
+      if (mounted) {
+        setState(() {
+          isSubmitting = false;
+          _statusMessage = '';
+        });
+      }
     }
   }
 
@@ -306,64 +423,260 @@ class _EmergencyReportingScreenState extends State<EmergencyReportingScreen> {
             builder: (context, constraints) {
               final bool stack = constraints.maxWidth < 360;
 
-              final children = [
-                Expanded(
-                  child: _SeverityChip(
-                    label: 'Mild',
-                    active: selectedSeverity == 'Mild',
-                    color: AppColors.success,
-                    onTap: () {
-                      setState(() {
-                        selectedSeverity = 'Mild';
-                      });
-                    },
-                  ),
-                ),
-                if (!stack) const SizedBox(width: 10),
-                Expanded(
-                  child: _SeverityChip(
-                    label: 'Moderate',
-                    active: selectedSeverity == 'Moderate',
-                    color: AppColors.warning,
-                    onTap: () {
-                      setState(() {
-                        selectedSeverity = 'Moderate';
-                      });
-                    },
-                  ),
-                ),
-                if (!stack) const SizedBox(width: 10),
-                Expanded(
-                  child: _SeverityChip(
-                    label: 'Critical',
-                    active: selectedSeverity == 'Critical',
-                    color: AppColors.primary,
-                    onTap: () {
-                      setState(() {
-                        selectedSeverity = 'Critical';
-                      });
-                    },
-                  ),
-                ),
-              ];
+              final mild = _SeverityChip(
+                label: 'Mild',
+                active: selectedSeverity == 'Mild',
+                color: AppColors.success,
+                onTap: () {
+                  setState(() {
+                    selectedSeverity = 'Mild';
+                  });
+                },
+              );
+
+              final moderate = _SeverityChip(
+                label: 'Moderate',
+                active: selectedSeverity == 'Moderate',
+                color: AppColors.warning,
+                onTap: () {
+                  setState(() {
+                    selectedSeverity = 'Moderate';
+                  });
+                },
+              );
+
+              final critical = _SeverityChip(
+                label: 'Critical',
+                active: selectedSeverity == 'Critical',
+                color: AppColors.primary,
+                onTap: () {
+                  setState(() {
+                    selectedSeverity = 'Critical';
+                  });
+                },
+              );
 
               if (stack) {
                 return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    children[0],
+                    mild,
                     const SizedBox(height: 10),
-                    children[1],
+                    moderate,
                     const SizedBox(height: 10),
-                    children[2],
+                    critical,
                   ],
                 );
               }
 
-              return Row(children: children);
+              return Row(
+                children: [
+                  Expanded(child: mild),
+                  const SizedBox(width: 10),
+                  Expanded(child: moderate),
+                  const SizedBox(width: 10),
+                  Expanded(child: critical),
+                ],
+              );
             },
           ),
 
+          const SizedBox(height: 24),
+
+          // --- Scene Photo Section (Optional) ---
+          const Text(
+            'Scene Photo (Optional)',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'AI will analyze the scene to improve triage accuracy.',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          if (_sceneImage == null)
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickFromCamera,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: AppColors.infoSoft,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppColors.info.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.camera_alt_rounded,
+                              color: AppColors.info, size: 22),
+                          SizedBox(width: 8),
+                          Text(
+                            'Camera',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.info,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickFromGallery,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.photo_library_rounded,
+                              color: AppColors.textSecondary, size: 22),
+                          SizedBox(width: 8),
+                          Text(
+                            'Gallery',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.successSoft,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                    color: AppColors.success.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: kIsWeb
+                        ? Image.network(
+                            _sceneImage!.path,
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                          )
+                        : Image.file(
+                            File(_sceneImage!.path),
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                          ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Scene photo captured',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.success,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'AI will analyze on submit',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  InkWell(
+                    onTap: _removeImage,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.close,
+                        size: 18,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           const SizedBox(height: 26),
+
+          if (isSubmitting && _statusMessage.isNotEmpty)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.infoSoft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.info,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    _statusMessage,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.info,
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           PrimaryActionButton(
             label: isSubmitting ? 'Submitting...' : 'Start AI Triage',

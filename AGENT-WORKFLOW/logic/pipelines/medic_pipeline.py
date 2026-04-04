@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict, Optional
 
 from logic.agents.explanation_agent import run_explanation_agent
 from logic.agents.input_agent import run_input_agent
@@ -25,8 +25,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def run_medic_pipeline(input_text: str, blockchain_history=None, latitude=None, longitude=None, vitals: dict = None) -> Dict:
+def run_medic_pipeline(input_text: str, blockchain_history=None, latitude=None, longitude=None, vitals: dict = None, scene_context: Optional[Dict[str, Any]] = None) -> Dict:
     patient_data = run_input_agent(input_text)
+    patient_data.pop("scene_context", None)  # strip if present from old callers
     patient = PatientEmergencyModel(**patient_data)
     patient.source_type = "ambulance"
 
@@ -47,8 +48,8 @@ def run_medic_pipeline(input_text: str, blockchain_history=None, latitude=None, 
 
     persist_new_case(patient)
 
-    triage_context = run_triage_agent(patient, blockchain_history=blockchain_history)
-    triage_eval = evaluate_triage(patient, triage_context)
+    triage_context = run_triage_agent(patient, blockchain_history=blockchain_history, scene_context=scene_context)
+    triage_eval = evaluate_triage(patient, triage_context, scene_context=scene_context)
     patient.triage_output = triage_eval["triage_output"]
 
     recommendations = recommend_hospitals(
@@ -217,6 +218,14 @@ def run_medic_pipeline(input_text: str, blockchain_history=None, latitude=None, 
         },
         "risk_flags": selected_hospital.risk_flags if selected_hospital else [],
         "events": events,
+        "scene_context": {
+            "applied": True,
+            "severity_hint": triage_eval.get("scene_severity_hint_used"),
+            "description": scene_context.get("scene_description", "") if scene_context else "",
+            "risk_indicators": scene_context.get("risk_indicators", []) if scene_context else [],
+            "possible_conditions": scene_context.get("possible_conditions", []) if scene_context else [],
+            "note": "Scene trauma indicators increased severity assessment.",
+        } if triage_eval.get("scene_influence_applied") and scene_context else None,
         # ── Medic-specific fields (for hospital notification / route nav) ────
         "selected_hospital_id": selected_hospital.hospital_id if selected_hospital else None,
         "selected_hospital": selected_hospital_payload,

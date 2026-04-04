@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../core/app_colors.dart';
 import '../services/api_service.dart';
+import '../services/patient_identity_service.dart';
 import '../widgets/app_page_header.dart';
 import '../widgets/app_shell_scaffold.dart';
 import '../widgets/primary_action_button.dart';
@@ -15,6 +18,9 @@ class CaseIntakeScreen extends StatefulWidget {
 }
 
 class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
+  static const String _defaultPrompt =
+      'Tap the mic and speak patient symptoms...';
+
   final TextEditingController spo2Controller = TextEditingController(
     text: '94',
   );
@@ -41,15 +47,29 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
   late stt.SpeechToText _speech;
   bool _speechAvailable = false;
   bool _isListening = false;
-  String _spokenText = 'Tap the mic and speak patient symptoms...';
+  bool _isSpeechBusy = false;
+  String _spokenText = _defaultPrompt;
+  String _speechStatusText = 'Voice service is starting...';
+  String? _speechLocaleId;
+  bool _sessionCapturedSpeech = false;
+  Timer? _listenHealthTimer;
 
   @override
   void initState() {
     super.initState();
-    _patientId = 'PATIENT-${DateTime.now().millisecondsSinceEpoch % 100000}';
+    _patientId = 'PATIENT-LOCAL';
+    _initPatientId();
     _speech = stt.SpeechToText();
     _initSpeech();
     _fetchLocation();
+  }
+
+  Future<void> _initPatientId() async {
+    final id = await PatientIdentityService.getOrCreatePatientId();
+    if (!mounted) return;
+    setState(() {
+      _patientId = id;
+    });
   }
 
   Future<void> _fetchLocation() async {
@@ -63,33 +83,162 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
   }
 
   Future<void> _initSpeech() async {
-    _speechAvailable = await _speech.initialize();
-    if (mounted) setState(() {});
+    try {
+      _speechAvailable = await _speech.initialize(
+        onStatus: _onSpeechStatus,
+        onError: _onSpeechError,
+      );
+
+      if (_speechAvailable) {
+        _speechLocaleId = await _pickPreferredLocale();
+        _speechStatusText = 'Voice ready';
+      } else {
+        _speechStatusText = 'Microphone permission required';
+      }
+    } catch (_) {
+      _speechAvailable = false;
+      _speechStatusText = 'Voice unavailable on this device';
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
-  Future<void> _startListening() async {
-    if (!_speechAvailable) return;
+  Future<String?> _pickPreferredLocale() async {
+    try {
+      final locales = await _speech.locales();
+      if (locales.isEmpty) return null;
 
-    await _speech.listen(
-      onResult: (result) {
-        setState(() {
-          _spokenText = result.recognizedWords.isEmpty
-              ? 'Listening...'
-              : result.recognizedWords;
-        });
-      },
-    );
+      for (final l in locales) {
+        if (l.localeId.toLowerCase() == 'en_in') return l.localeId;
+      }
+      for (final l in locales) {
+        if (l.localeId.toLowerCase() == 'en_us') return l.localeId;
+      }
+      return locales.first.localeId;
+    } catch (_) {
+      return null;
+    }
+  }
 
+  void _onSpeechStatus(String status) {
+    if (!mounted) return;
+
+    final normalized = status.toLowerCase();
+    if (normalized == 'listening') {
+      setState(() {
+        _isListening = true;
+        _speechStatusText = 'Listening...';
+      });
+      return;
+    }
+
+    if (normalized == 'notlistening' || normalized == 'done') {
+      setState(() {
+        _isListening = false;
+        _speechStatusText = _spokenText == _defaultPrompt
+            ? 'No speech detected. Tap mic and speak clearly.'
+            : 'Voice captured successfully';
+      });
+    }
+  }
+
+  void _onSpeechError(dynamic error) {
+    if (!mounted) return;
+    final errText = error?.toString() ?? 'unknown error';
     setState(() {
-      _isListening = true;
+      _isListening = false;
+      _speechStatusText = 'Voice error: $errText. Tap mic to retry.';
     });
+  }
+
+  Future<void> _startListening({int retryDepth = 0}) async {
+    if (_isSpeechBusy) return;
+    _isSpeechBusy = true;
+
+    try {
+      if (!_speechAvailable) {
+        await _initSpeech();
+      }
+      if (!_speechAvailable) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Please allow microphone permission for voice intake.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      await _speech.stop();
+      await _speech.cancel();
+
+      _sessionCapturedSpeech = false;
+      if (mounted) {
+        setState(() {
+          _isListening = true;
+          _speechStatusText = 'Listening...';
+        });
+      }
+
+      await _speech.listen(
+        localeId: _speechLocaleId,
+        listenFor: const Duration(seconds: 60),
+        pauseFor: const Duration(seconds: 6),
+        partialResults: true,
+        cancelOnError: false,
+        listenMode: stt.ListenMode.dictation,
+        onResult: (result) {
+          if (!mounted) return;
+          final words = result.recognizedWords.trim();
+          if (words.isNotEmpty) {
+            _sessionCapturedSpeech = true;
+            setState(() {
+              _spokenText = words;
+              _speechStatusText = result.finalResult
+                  ? 'Voice captured successfully'
+                  : 'Listening...';
+            });
+          }
+        },
+      );
+
+      _listenHealthTimer?.cancel();
+      _listenHealthTimer = Timer(const Duration(seconds: 2), () async {
+        if (!mounted) return;
+        if (!_speech.isListening &&
+            _isListening &&
+            !_sessionCapturedSpeech &&
+            retryDepth < 2) {
+          setState(() {
+            _isListening = false;
+            _speechStatusText = 'Reconnecting microphone...';
+          });
+          await _startListening(retryDepth: retryDepth + 1);
+        }
+      });
+    } finally {
+      _isSpeechBusy = false;
+    }
   }
 
   Future<void> _stopListening() async {
+    _listenHealthTimer?.cancel();
     await _speech.stop();
-    setState(() {
-      _isListening = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isListening = false;
+        _speechStatusText =
+            (!_sessionCapturedSpeech || _spokenText == _defaultPrompt)
+            ? 'No speech detected. Tap mic and speak clearly.'
+            : 'Voice captured successfully';
+      });
+    }
   }
 
   Future<void> _submitCase() async {
@@ -130,6 +279,9 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
 
   @override
   void dispose() {
+    _listenHealthTimer?.cancel();
+    _speech.stop();
+    _speech.cancel();
     spo2Controller.dispose();
     systolicController.dispose();
     diastolicController.dispose();
@@ -243,6 +395,18 @@ class _CaseIntakeScreenState extends State<CaseIntakeScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _speechStatusText,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 14),
                   Container(

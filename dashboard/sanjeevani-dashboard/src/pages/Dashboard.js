@@ -9,8 +9,9 @@ import MapView from "../components/MapView";
 import NotificationPanel from "../components/NotificationPanel";
 import ActiveCasesTable from "../components/ActiveCasesTable";
 import EventFlow from "../components/EventFlow";
+import SceneAnalysisPanel from "../components/SceneAnalysisPanel";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = process.env.REACT_APP_API_BASE || "http://10.23.46.111:8000";
 const POLL_INTERVAL_MS = 5000;
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,7 @@ function transformCase(apiCase) {
       compatibility: (h.compatibility || "risky").toLowerCase(),
       score: h.score,
     })),
+    sceneContext: apiCase.scene_context || null,
   };
 }
 
@@ -231,7 +233,7 @@ export default function Dashboard() {
             Emergency Operations Relay
           </Typography>
           <Typography className="title-main" variant="h4">
-            Sanjeevani AI Command Center
+            JIVAN AI Command Center
           </Typography>
           <Typography className="title-sub" variant="body2">
             We do not optimize for distance, we optimize for time to treatment.
@@ -272,6 +274,7 @@ export default function Dashboard() {
             selectedCase={selectedCase}
             selectedHospital={selectedHospital}
           />
+          <SceneAnalysisPanel sceneContext={selectedCase?.sceneContext} />
         </Box>
 
         {/* RIGHT PANEL */}

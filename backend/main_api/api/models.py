@@ -54,6 +54,7 @@ class EmergencyCases(models.Model):
     severity_score = models.IntegerField()
     urgency_level = models.CharField(max_length=50)
     required_specialist = models.CharField(max_length=50)
+    scene_context = models.TextField(null=True, blank=True, default=None)  # JSON from /api/analyze-scene/
 
     class Meta:
         db_table = 'emergency_cases'

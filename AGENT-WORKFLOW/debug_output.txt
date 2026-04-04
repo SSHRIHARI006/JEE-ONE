@@ -1,0 +1,70 @@
+﻿python.exe : [BATCH 
+EXPLANATION] Haiku call 
+failed: Expecting value: 
+line 1 column 1 (char 0)
+At line:1 char:1
++ & "C:\Users\mohap\Deskto
+p\kunal\coding journey\pro
+ject\MIT\JEE-ONE\ba ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: ([  
+  BATCH EXPLANAT...lumn   
+  1 (char 0):String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+Django setup failed (this is OK for raw pipeline test): No module named 'main_api'
+
+=== Step 1: Testing Claude client ===
+Claude client: AVAILABLE
+
+=== Step 2: Testing input agent ===
+OK: input agent returned case_id=case-2afbbac5
+
+=== Step 3: Testing patient model ===
+OK: patient model created, case_id=case-2afbbac5
+
+=== Step 4: Testing DB connection ===
+OK: MySQL connection works
+
+=== Step 5: Testing persist_new_case ===
+OK: persist_new_case succeeded
+
+=== Step 6: Testing triage agent ===
+OK: triage context keys = ['suspected_conditions', 'risk_flags', 'diagnosis', 'diagnosis_reasoning', 'diagnosis_severity', 'required_specialist']
+
+=== Step 7: Testing triage evaluation ===
+OK: severity=10
+
+=== Step 8: Testing hospital load ===
+OK: 7 hospitals loaded from DB
+  First hospital columns: ['hospital_id', 'hospital_name', 'latitude', 'longitude', 'hospital_type', 'has_ICU', 'max_ICU_beds', 'available_ICU_beds', 'current_load_percentage', 'avg_intake_delay', 'readiness_score', 'last_updated_timestamp']
+
+=== Step 9: Testing hospital recommendation ===
+OK: 3 hospitals recommended
+  Deoyani Hospital ù ETA 21722m, score 10876.41
+  Mai Mangeshkar ù ETA 21717m, score 10884.84
+  Sahyadri Kothrud ù ETA 21722m, score 10877.81
+
+=== Step 10: Testing explanation agent ===
+OK: explanations generated
+
+=== Step 11: Testing decision router ===
+OK: decision_type=emergency_routing
+
+=== Step 12: Testing persist_core_outputs ===
+OK: persist_core_outputs succeeded
+
+=== Step 13: Testing full pipeline ===
+Pipeline result: fallback=False
+  case_id=case-53ec9be7
+  severity=10
+  decision_type=emergency_routing
+  first_aid steps=4
+
+=== DONE ===

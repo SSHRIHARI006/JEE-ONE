@@ -87,7 +87,7 @@ def _haversine_fallback(input_text: str, source_type: str) -> dict:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_workflow(input_text: str, source_type: str = 'public', latitude=None, longitude=None) -> dict:
+def run_workflow(input_text: str, source_type: str = 'public', latitude=None, longitude=None, scene_context: dict = None) -> dict:
     """
     Dispatch to the appropriate agent view and return the result dict.
 
@@ -97,7 +97,7 @@ def run_workflow(input_text: str, source_type: str = 'public', latitude=None, lo
     try:
         if source_type == 'ambulance':
             from logic.views.medic_view import handle_medic_request
-            result = handle_medic_request(input_text, latitude=latitude, longitude=longitude)
+            result = handle_medic_request(input_text, latitude=latitude, longitude=longitude, scene_context=scene_context)
 
             hospital_id = (
                 result.get("selected_recommendation", {}).get("hospital_id")
@@ -107,7 +107,7 @@ def run_workflow(input_text: str, source_type: str = 'public', latitude=None, lo
             logger.info(f"[JIVAN AGENT] Medic pipeline complete. Hospital: {hospital_id}")
         else:
             from logic.views.public_view import handle_public_request
-            result = handle_public_request(input_text, latitude=latitude, longitude=longitude)
+            result = handle_public_request(input_text, latitude=latitude, longitude=longitude, scene_context=scene_context)
 
             severity = result.get("case_summary", {}).get("severity", "?")
             hospital_name = (
@@ -127,7 +127,7 @@ def run_workflow(input_text: str, source_type: str = 'public', latitude=None, lo
         return _haversine_fallback(input_text, source_type)
 
 
-def run_patient_workflow(patient_id: str, input_text: str, vitals: dict, source_type: str = 'public', latitude=None, longitude=None) -> dict:
+def run_patient_workflow(patient_id: str, input_text: str, vitals: dict, source_type: str = 'public', latitude=None, longitude=None, scene_context: dict = None) -> dict:
     """
     Patient-aware workflow: fetches blockchain history for the patient, injects
     it into the pipeline so the diagnostic agent can correlate past events.
@@ -142,10 +142,10 @@ def run_patient_workflow(patient_id: str, input_text: str, vitals: dict, source_
     try:
         if source_type == 'ambulance':
             from logic.views.medic_view import handle_medic_request
-            result = handle_medic_request(input_text, blockchain_history=blockchain_history, latitude=latitude, longitude=longitude, vitals=vitals)
+            result = handle_medic_request(input_text, blockchain_history=blockchain_history, latitude=latitude, longitude=longitude, vitals=vitals, scene_context=scene_context)
         else:
             from logic.views.public_view import handle_public_request
-            result = handle_public_request(input_text, blockchain_history=blockchain_history, latitude=latitude, longitude=longitude, vitals=vitals)
+            result = handle_public_request(input_text, blockchain_history=blockchain_history, latitude=latitude, longitude=longitude, vitals=vitals, scene_context=scene_context)
 
         result["patient_id"] = patient_id
         result["blockchain_history_records"] = len(blockchain_history)

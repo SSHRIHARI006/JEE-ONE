@@ -3,7 +3,12 @@ import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://127.0.0.1:8000';
+  // Override at run/build time for real devices:
+  // --dart-define=API_BASE_URL=http://<your-laptop-lan-ip>:8000
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://10.23.46.111:8000',
+  );
 
   // ---------------------------------------------------------------------------
   // GPS helper
@@ -29,6 +34,30 @@ class ApiService {
   }
 
   // ---------------------------------------------------------------------------
+  // POST /api/analyze-scene/
+  // ---------------------------------------------------------------------------
+
+  /// Sends a base64-encoded scene photo to Claude vision for analysis.
+  /// Returns structured scene context (severity, injuries, hazards, etc.)
+  static Future<Map<String, dynamic>> analyzeScene({
+    required String imageBase64,
+    required String mediaType,
+  }) async {
+    final url = Uri.parse('$baseUrl/api/analyze-scene/');
+
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'image_base64': imageBase64, 'media_type': mediaType}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception('Scene analysis failed: ${response.body}');
+  }
+
+  // ---------------------------------------------------------------------------
   // POST /api/sos/
   // ---------------------------------------------------------------------------
 
@@ -41,10 +70,11 @@ class ApiService {
     required double latitude,
     required double longitude,
     String sourceType = 'ambulance',
+    Map<String, dynamic>? sceneContext,
   }) async {
     final url = Uri.parse('$baseUrl/api/sos/');
 
-    final body = {
+    final body = <String, dynamic>{
       "patient_id": patientId,
       "input_text": inputText,
       "source_type": sourceType,
@@ -54,6 +84,7 @@ class ApiService {
         "diastolic_bp": diastolicBp,
       },
       "location": {"latitude": latitude, "longitude": longitude},
+      if (sceneContext != null) "scene_context": sceneContext,
     };
 
     final response = await http.post(
@@ -74,7 +105,10 @@ class ApiService {
 
   static Future<List<dynamic>> getCases() async {
     final url = Uri.parse('$baseUrl/api/cases/');
-    final response = await http.get(url, headers: {'Content-Type': 'application/json'});
+    final response = await http.get(
+      url,
+      headers: {'Content-Type': 'application/json'},
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as List<dynamic>;
@@ -88,7 +122,10 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getCaseDetail(String caseId) async {
     final url = Uri.parse('$baseUrl/api/cases/$caseId/');
-    final response = await http.get(url, headers: {'Content-Type': 'application/json'});
+    final response = await http.get(
+      url,
+      headers: {'Content-Type': 'application/json'},
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
@@ -102,7 +139,10 @@ class ApiService {
 
   static Future<List<dynamic>> getAmbulances() async {
     final url = Uri.parse('$baseUrl/api/ambulances/');
-    final response = await http.get(url, headers: {'Content-Type': 'application/json'});
+    final response = await http.get(
+      url,
+      headers: {'Content-Type': 'application/json'},
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as List<dynamic>;

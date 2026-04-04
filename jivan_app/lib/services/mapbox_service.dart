@@ -10,7 +10,7 @@ class MapboxService {
   // Token stored as default value so it works without --dart-define
   static const String accessToken = String.fromEnvironment(
     'MAPBOX_TOKEN',
-    defaultValue: 'map_box_api',
+    defaultValue: 'mapbox_api',
   );
 
   /// Returns driving route coordinates between two points.
